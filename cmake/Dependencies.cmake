@@ -1,5 +1,5 @@
 # Third-party dependencies.
-#  - vcpkg (manifest mode, vcpkg.json): spdlog, GTest. FFmpeg/miniaudio/json join in later phases.
+#  - vcpkg (manifest mode, vcpkg.json): spdlog, nlohmann-json, GTest. FFmpeg/miniaudio join in later phases.
 #  - Qt 6: prebuilt LGPL binaries (aqtinstall locally, install-qt-action in CI), found via CMAKE_PREFIX_PATH.
 #  - Qt Advanced Docking System: built from source with FetchContent as a shared library (LGPL-2.1),
 #    because the vcpkg port would pull Qt from vcpkg as well.
@@ -7,8 +7,9 @@
 include(FetchContent)
 
 find_package(spdlog CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
 qt_standard_project_setup()
 
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -29,4 +30,5 @@ set_target_properties(qtadvanceddocking-qt6 PROPERTIES
 
 if(LOKI_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
 endif()

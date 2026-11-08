@@ -8,7 +8,12 @@
 #include <array>
 #include <cstddef>
 
+class QCloseEvent;
 class QSettings;
+
+namespace loki::ui {
+class ProjectController;
+} // namespace loki::ui
 
 namespace ads {
 class CDockManager;
@@ -45,11 +50,24 @@ public:
     // Returns true if a saved window geometry was applied (false on first run).
     bool restoreSettings(const QSettings& settings);
 
+    [[nodiscard]] ui::ProjectController* projectController() const noexcept { return m_controller; }
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
 private:
     void createDockWidgets();
     void createMenus();
+    void updateTitle();
+    void openProject();
+    bool save();
+    bool saveAs();
+    // Asks to save unsaved changes. Returns false if the user cancelled.
+    bool maybeSave();
+    [[nodiscard]] static QString projectFileFilter();
 
-    ads::CDockManager* m_dockManager = nullptr; // owned by this window (Qt parent)
+    ui::ProjectController* m_controller = nullptr; // owned by this window (Qt parent)
+    ads::CDockManager* m_dockManager = nullptr;    // owned by this window (Qt parent)
     std::array<ads::CDockWidget*, ui::kAllPanels.size()> m_docks{};
 };
 

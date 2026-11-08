@@ -1,0 +1,83 @@
+{
+  "format": "loki-project",
+  "version": 1,
+  "bins": [
+    { "id": "22222222-2222-4222-8222-222222222222", "name": "Footage", "parent": null }
+  ],
+  "media": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "interview",
+      "path": "C:/media/interview.mp4",
+      "relativePath": "../media/interview.mp4",
+      "bin": "22222222-2222-4222-8222-222222222222",
+      "info": {
+        "hasVideo": true,
+        "hasAudio": true,
+        "width": 1920,
+        "height": 1080,
+        "frameRate": [30000, 1001],
+        "duration": [60, 1],
+        "sampleRate": 48000,
+        "audioChannels": 2,
+        "videoCodec": "h264",
+        "audioCodec": "aac"
+      }
+    }
+  ],
+  "sequences": [
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "Sequence 01",
+      "settings": { "width": 1920, "height": 1080, "frameRate": [30000, 1001], "sampleRate": 48000 },
+      "videoTracks": [
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "name": "V1",
+          "locked": false,
+          "hidden": false,
+          "muted": false,
+          "clips": [
+            {
+              "id": "55555555-5555-4555-8555-555555555555",
+              "media": "11111111-1111-4111-8111-111111111111",
+              "name": "interview",
+              "start": [1001, 30000],
+              "sourceIn": [0, 1],
+              "duration": [10, 1],
+              "enabled": true,
+              "link": null,
+              "effects": [
+                {
+                  "id": "66666666-6666-4666-8666-666666666666",
+                  "type": "loki.opacity",
+                  "enabled": true,
+                  "parameters": [
+                    {
+                      "key": "opacity",
+                      "value": 100.0,
+                      "keyframes": [
+                        { "time": [0, 1], "value": 0.0, "interpolation": "linear", "easeIn": 0.3333333333333333, "easeOut": 0.3333333333333333 },
+                        { "time": [1, 1], "value": 100.0, "interpolation": "linear", "easeIn": 0.3333333333333333, "easeOut": 0.3333333333333333 }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "audioTracks": [
+        {
+          "id": "77777777-7777-4777-8777-777777777777",
+          "name": "A1",
+          "locked": false,
+          "hidden": false,
+          "muted": true,
+          "clips": []
+        }
+      ]
+    }
+  ]
+}

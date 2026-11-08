@@ -7,15 +7,15 @@ Editor de video no lineal para PC (Windows 10/11 x64 primero, código portable).
 Premiere Pro. Se construye por fases; al terminar cada fase: compilar, tests verdes, commit (Conventional
 Commits), actualizar este archivo, resumir y **esperar confirmación del usuario** antes de la siguiente fase.
 
-Docs: `docs/ARCHITECTURE.md`, `docs/LICENSING.md`, `docs/BUILD.md`.
+Docs: `docs/ARCHITECTURE.md`, `docs/LICENSING.md`, `docs/BUILD.md`, `docs/PROJECT_FORMAT.md`.
 
 ## Stack
 - C++20, CMake ≥ 3.25 + `CMakePresets.json`, vcpkg modo manifest (`vcpkg.json`, baseline fija).
 - Qt 6.8.3 Widgets **precompilado** (aqtinstall local / install-qt-action en CI), encontrado vía `LOKI_QT_DIR`.
 - Qt Advanced Docking System v5.1.1 vía `FetchContent` (DLL, LGPL-2.1).
 - OpenGL 3.3 core vía `QOpenGLWidget` (Fase 6).
-- FFmpeg (Fase 3), miniaudio (Fase 8), nlohmann/json (Fase 2) — se agregan a vcpkg.json en su fase.
-- spdlog, GoogleTest.
+- nlohmann/json (proyecto), spdlog, GoogleTest, Qt Concurrent/Test.
+- FFmpeg (Fase 3), miniaudio (Fase 8) — se agregan a vcpkg.json en su fase.
 - **Licencia: solo LGPL.** Prohibido enlazar libx264/libx265 u otro GPL sin preguntar. H.264: NVENC/QSV/AMF,
   fallback OpenH264.
 
@@ -35,13 +35,20 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - Namespace `loki::<módulo>`. Archivos `snake_case.h/.cpp`, tipos `PascalCase`, funciones/variables
   `camelCase`, miembros `m_` prefijo, constantes `kName`.
 - Tiempo de edición SIEMPRE `loki::Rational`, nunca `double`.
-- Toda mutación del modelo vía `Command` (undo/redo).
+- Toda mutación del modelo vía `Command` (undo/redo). `Project` es solo lectura; escribir = `ProjectMutator`
+  (solo accesible desde `Command::mutate()` y `ProjectBuilder`). UI ejecuta vía `ProjectController::execute()`.
+- Arrastres/sliders: pedir `ProjectController::newGestureId()` y pasarlo a MoveClip/trimClip/setParameterValue
+  para fundir en un solo undo. GestureId 0 = nunca fundir.
+- Keyframes en tiempo del *source* del clip. IDs = UUID (`model::Id<Tag>` tipado).
+- Cambio de esquema `.loki`: subir `kProjectFormatVersion` + migración + golden en `tests/data/`.
 - RAII; sin `new`/`delete` crudos; sin globales mutables; FFmpeg en `unique_ptr` con deleter.
   Excepción: `new` de QObject/QWidget con padre Qt (el padre es dueño).
 - Nada de I/O ni decode en el hilo de UI.
 - Cada módulo de `src/` = biblioteca estática `loki_<módulo>` (alias `loki::<módulo>`), aplica
   `loki_set_warnings()` (/W4 /WX). Dependencias acíclicas (ARCHITECTURE.md §2).
 - Tests: GoogleTest en `tests/<módulo>/`, registrados con `loki_add_test_executable` (gtest_add_tests).
+  Ejecutables: loki_util_tests, loki_model_tests, loki_commands_tests, loki_app_tests (Qt, offscreen).
+  Helpers en `tests/support/` (TempDir, model_fixtures). Datos en `tests/data/` (`LOKI_TEST_DATA_DIR`).
   Tests con Qt enlazan `tests/qt_test_main.cpp`. Assets pequeños generados con FFmpeg en `tests/assets`.
 - Commits: Conventional Commits, autor = usuario (git config del repo). **Sin `Co-Authored-By` ni otra
   atribución**: el usuario debe figurar como único colaborador.
@@ -65,7 +72,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 ## Estado de fases
 - [x] Paso 0 — inspección, CLAUDE.md, docs/ARCHITECTURE.md
 - [x] 1. Fundaciones — CMake+vcpkg+presets, Qt+ADS shell 6 paneles, tema oscuro, spdlog, gtest (17 tests), CI Windows, ASan OK
-- [ ] 2. Modelo y comandos
+- [x] 2. Modelo y comandos — Rational/timecode/UUID, modelo puro, Commands+UndoStack, JSON v1, ProjectController, 139 tests (ASan OK)
 - [ ] 3. Medios
 - [ ] 4. Reproducción
 - [ ] 5. Línea de tiempo + Monitor de Programa
@@ -76,5 +83,8 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [ ] 10. Exportación
 - [ ] 11. Robustez y rendimiento
 
+- D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],
+  UUID, ruta abs+rel); sin solapes en pista.
+
 ## Decisiones pendientes
-- Modelo: C++ puro + adaptador Qt (propuesto) vs. QObject (Fase 2).
+- (ninguna)

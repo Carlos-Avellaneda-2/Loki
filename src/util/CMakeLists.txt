@@ -1,6 +1,14 @@
 add_library(loki_util STATIC
+    atomic_file.h
+    atomic_file.cpp
     logging.h
     logging.cpp
+    rational.h
+    rational.cpp
+    timecode.h
+    timecode.cpp
+    uuid.h
+    uuid.cpp
 )
 add_library(loki::util ALIAS loki_util)
 

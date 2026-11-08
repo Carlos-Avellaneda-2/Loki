@@ -99,29 +99,44 @@ graph TD
   cuantizan a frame de secuencia; las de audio pueden ser a nivel de muestra.
 - Timecode (`HH:MM:SS:FF`, drop-frame para 29.97/59.94) solo para presentación/entrada.
 
-## 4. Modelo y comandos
+## 4. Modelo y comandos (decidido en Fase 2: D1–D4)
 
-**(decisión pendiente, Fase 2)** Propuesta: modelo en C++ puro (sin QObject) con un mecanismo de notificación
-ligero (`ModelObserver` / eventos de cambio granulares). Un adaptador `ProjectController : QObject` en `ui`
-traduce esos eventos a señales Qt. Ventajas: tests sin Qt, snapshots baratos para hilos de render/export,
-sin coste de un `QObject` por clip.
+- **D1 – Modelo en C++ puro.** `src/model` no depende de Qt. `Project` notifica cada cambio con un
+  `ChangeEvent` (tipo, id, contenedor) a los `ProjectObserver` registrados. El adaptador
+  `ui::ProjectController : QObject` convierte esos eventos en señales Qt, es dueño del `Project` y del
+  `UndoStack`, expone las acciones Undo/Redo y carga/guarda en un hilo de trabajo (`QtConcurrent`).
+- **D2 – Solo los Commands mutan.** La API pública de `Project` es de solo lectura (referencias `const`). La
+  única escritura es `ProjectMutator`, cuyo constructor es privado y solo accesible a `commands::Command`
+  (vía `Command::mutate()`) y a `ProjectBuilder`. `ProjectBuilder` solo crea proyectos nuevos (cargar, plantillas,
+  tests). Toda operación del mutator valida invariantes y, si falla, lanza `ModelError` sin cambiar nada.
+- **D3 – Formato `.loki`.** JSON con `format`/`version`, tiempos `[num, den]`, IDs UUID v4 y ruta absoluta +
+  relativa de los medios. Detalle en `docs/PROJECT_FORMAT.md`.
+- **D4 – Sin solapes.** Los clips de una pista están ordenados por `start` y no se solapan. Insertar/sobrescribir
+  (Fase 5) resolverán los solapes con macros de comandos.
 
 ```
 Project
- ├─ MediaItem[]        (ruta, metadatos de probe, ruta de proxy, id estable)
- ├─ Bin[] (árbol)      (carpetas que referencian MediaItem por id)
+ ├─ MediaItem[]        (id, nombre, ruta, proxy, bin, MediaInfo)
+ ├─ Bin[] (árbol)      (id, nombre, parent)
  └─ Sequence[]
      ├─ settings       (resolución, frameRate, sampleRate)
-     ├─ VideoTrack[] / AudioTrack[]  (lock, hide/mute, nombre)
-     │    └─ Clip[]    (mediaId, timelineStart, sourceIn, duration, linkGroupId)
-     │         └─ Effect[] → Parameter[] → Keyframe[] (tiempo Rational, valor, interpolación)
-     └─ Transition[]
+     ├─ videoTracks[] / audioTracks[]  (id, TrackState: nombre, locked, hidden, muted)
+     │    └─ Clip[]    (id, media, start, sourceIn, duration, enabled, link)
+     │         └─ Effect[] → Parameter[] → Keyframe[] (tiempo en el *source*, valor, Hold/Linear/Bezier)
+     └─ (Transition[] en Fase 9, con migración de formato)
 ```
 
-- IDs estables (`uint64_t` o UUID) para referencias cruzadas y serialización.
-- `Command { virtual void redo(); virtual void undo(); virtual std::string text() const; mergeWith(...) }`.
-  `UndoStack` sin límite, con macros (comandos compuestos) para ediciones como ripple/extract.
-- Serialización JSON con `"version": N` en la raíz y una cadena de migraciones `vN -> vN+1` probada.
+- Los tiempos de los keyframes están en el tiempo del *source* del clip, así siguen al contenido al mover, recortar
+  o dividir.
+- `Command`: `redo()`/`undo()`/`text()`; la primera ejecución valida y tiene garantía fuerte (si falla, no cambia
+  nada). `MacroCommand` agrupa y revierte a los hijos ya aplicados si uno falla.
+- `UndoStack`: ilimitado, macros anidadas (`MacroGuard` RAII), estado "limpio" (guardado) y `Point` +
+  `markCleanAt()` para guardados asíncronos.
+- **Fusión por gesto:** comandos con el mismo `GestureId` distinto de cero (un arrastre, un slider) se funden en un
+  solo paso de undo; con `GestureId` 0 nunca se funden. La UI pide ids con `ProjectController::newGestureId()`.
+- Los clips de pistas bloqueadas no se pueden editar. Se comprueba solo en la primera ejecución, así undo/redo
+  siempre reproducen fielmente.
+- Copiar un `Project` copia los datos pero no los observadores: sirve como snapshot barato para otros hilos.
 
 ## 5. Concurrencia y flujo de datos
 
