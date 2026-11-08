@@ -1,0 +1,25 @@
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+IndentWidth: 4
+ColumnLimit: 120
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: true
+AlwaysBreakTemplateDeclarations: Yes
+BreakConstructorInitializers: BeforeColon
+DerivePointerAlignment: false
+PointerAlignment: Left
+FixNamespaceComments: true
+NamespaceIndentation: None
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<(Q|ads|Dock)'
+    Priority: 2
+  - Regex: '^<(spdlog|gtest|gmock|nlohmann|libav|miniaudio)'
+    Priority: 3
+  - Regex: '^<'
+    Priority: 4

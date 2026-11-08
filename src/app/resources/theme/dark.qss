@@ -1,0 +1,82 @@
+/* Loki dark theme (Premiere-like). Palette colors come from theme.cpp; this sheet styles
+   widgets the palette does not reach, mainly Qt Advanced Docking System parts. */
+
+QMainWindow, QWidget {
+    font-size: 9pt;
+}
+
+QMenuBar {
+    background: #1e1e1e;
+    color: #cccccc;
+}
+QMenuBar::item:selected {
+    background: #3a3a3a;
+}
+QMenu {
+    background: #262626;
+    color: #cccccc;
+    border: 1px solid #3a3a3a;
+}
+QMenu::item:selected {
+    background: #2d8ceb;
+    color: #ffffff;
+}
+
+QLabel#placeholderLabel {
+    color: #6e6e6e;
+    font-size: 11pt;
+}
+
+QSplitter::handle,
+ads--CDockSplitter::handle {
+    background: #141414;
+}
+
+ads--CDockContainerWidget {
+    background: #141414;
+}
+
+ads--CDockAreaWidget {
+    background: #232323;
+    border: 1px solid #141414;
+}
+
+ads--CDockAreaTitleBar {
+    background: #1e1e1e;
+    border-bottom: 1px solid #141414;
+}
+
+ads--CDockWidgetTab {
+    background: #1e1e1e;
+    border: none;
+    padding: 0 6px;
+}
+ads--CDockWidgetTab QLabel {
+    color: #8a8a8a;
+}
+ads--CDockWidgetTab[activeTab="true"] {
+    background: #232323;
+}
+ads--CDockWidgetTab[activeTab="true"] QLabel {
+    color: #e6e6e6;
+}
+ads--CDockWidgetTab[focused="true"] {
+    border-bottom: 2px solid #2d8ceb;
+}
+
+ads--CDockWidget {
+    background: #232323;
+}
+
+ads--CFloatingDockContainer {
+    background: #141414;
+}
+
+QScrollBar:vertical, QScrollBar:horizontal {
+    background: #1b1b1b;
+    border: none;
+}
+QScrollBar::handle {
+    background: #3a3a3a;
+    border-radius: 3px;
+}
