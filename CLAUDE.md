@@ -14,8 +14,9 @@ Docs: `docs/ARCHITECTURE.md`, `docs/LICENSING.md`, `docs/BUILD.md`, `docs/PROJEC
 - Qt 6.8.3 Widgets **precompilado** (aqtinstall local / install-qt-action en CI), encontrado vía `LOKI_QT_DIR`.
 - Qt Advanced Docking System v5.1.1 vía `FetchContent` (DLL, LGPL-2.1).
 - OpenGL 3.3 core vía `QOpenGLWidget` (Fase 6).
-- nlohmann/json (proyecto), spdlog, GoogleTest, Qt Concurrent/Test.
-- FFmpeg (Fase 3), miniaudio (Fase 8) — se agregan a vcpkg.json en su fase.
+- nlohmann/json (proyecto), spdlog, GoogleTest, Qt Concurrent/Test/OpenGL/OpenGLWidgets.
+- FFmpeg 8 vía vcpkg (features: avcodec avformat swresample swscale nvcodec qsv amf openh264 zlib) como
+  target `loki::ffmpeg`; miniaudio header-only como `loki::miniaudio` (impl en audio/miniaudio_device.cpp).
 - **Licencia: solo LGPL.** Prohibido enlazar libx264/libx265 u otro GPL sin preguntar. H.264: NVENC/QSV/AMF,
   fallback OpenH264.
 
@@ -48,10 +49,15 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
   `loki_set_warnings()` (/W4 /WX). Dependencias acíclicas (ARCHITECTURE.md §2).
 - Tests: GoogleTest en `tests/<módulo>/`, registrados con `loki_add_test_executable` (gtest_add_tests).
   Ejecutables: loki_util_tests, loki_model_tests, loki_commands_tests, loki_app_tests (Qt, offscreen).
-  Helpers en `tests/support/` (TempDir, model_fixtures). Datos en `tests/data/` (`LOKI_TEST_DATA_DIR`).
+  Helpers en `tests/support/` (TempDir, model_fixtures, MediaAssets = medios sintéticos generados con libav:
+  luma de cada fotograma = `expectedLuma(i)`). Datos en `tests/data/` (`LOKI_TEST_DATA_DIR`).
+  Motor de playback testeable con `ManualAudioDevice` + `TimeSource` falso.
   Tests con Qt enlazan `tests/qt_test_main.cpp`. Assets pequeños generados con FFmpeg en `tests/assets`.
 - Commits: Conventional Commits, autor = usuario (git config del repo). **Sin `Co-Authored-By` ni otra
   atribución**: el usuario debe figurar como único colaborador.
+- Monitores de video: `ui::VideoView` usa `QOpenGLWindow` nativo + `createWindowContainer`, NO
+  `QOpenGLWidget` (con QOpenGLWidget la ventana se veía en blanco en Intel HD 620). Las capturas GDI de
+  PowerShell no ven contenido GL nativo: para verificar el render usar `grabFramebuffer()`.
 - Cambios al diseño original por limitaciones de la máquina: proponer y esperar aprobación antes de aplicarlos.
 
 ## Entorno local (máquina del usuario)
@@ -73,8 +79,8 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] Paso 0 — inspección, CLAUDE.md, docs/ARCHITECTURE.md
 - [x] 1. Fundaciones — CMake+vcpkg+presets, Qt+ADS shell 6 paneles, tema oscuro, spdlog, gtest (17 tests), CI Windows, ASan OK
 - [x] 2. Modelo y comandos — Rational/timecode/UUID, modelo puro, Commands+UndoStack, JSON v1, ProjectController, 139 tests (ASan OK)
-- [ ] 3. Medios
-- [ ] 4. Reproducción
+- [x] 3. Medios — probe, decoders (hwaccel+fallback), FrameCache, MediaCache, thumbnails, waveforms, Project panel
+- [x] 4. Reproducción — PlaybackClock (audio master), PlaybackEngine, J/K/L, scrub, Source Monitor GL
 - [ ] 5. Línea de tiempo + Monitor de Programa
 - [ ] 6. Composición GPU y efectos
 - [ ] 7. Edición avanzada
@@ -85,6 +91,10 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 
 - D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],
   UUID, ruta abs+rel); sin solapes en pista.
+
+- D5–D10 (Fases 3/4): FFmpeg compilado una vez con todas las features LGPL; monitores en OpenGL (copia de hw
+  frames a RAM, sin zero-copy); miniaudio adelantado a Fase 4; assets de test generados en runtime con libav;
+  marcas In/Out opcionales en MediaItem (v1 compatible); caché configurable (usuario: F:\LokiCache).
 
 ## Decisiones pendientes
 - (ninguna)

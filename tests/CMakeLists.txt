@@ -27,6 +27,7 @@ loki_add_test_executable(loki_util_tests
         util/atomic_file_test.cpp
         util/logging_test.cpp
         util/rational_test.cpp
+        util/task_pool_test.cpp
         util/timecode_test.cpp
         util/uuid_test.cpp
     LIBS loki::util GTest::gtest GTest::gtest_main)
@@ -46,10 +47,36 @@ loki_add_test_executable(loki_commands_tests
         commands/undo_stack_test.cpp
     LIBS loki::commands GTest::gtest GTest::gtest_main)
 
+# Synthetic media generated with the linked FFmpeg encoders (D8).
+add_library(loki_test_support STATIC
+    support/media_assets.h
+    support/media_assets.cpp
+    support/media_generator.h
+    support/media_generator.cpp
+)
+target_include_directories(loki_test_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/support")
+target_link_libraries(loki_test_support PUBLIC loki::media GTest::gtest)
+loki_set_warnings(loki_test_support)
+
+loki_add_test_executable(loki_media_tests
+    SOURCES
+        media/audio_decoder_test.cpp
+        media/media_cache_test.cpp
+        media/media_probe_test.cpp
+        media/video_decoder_test.cpp
+    LIBS loki_test_support loki::media GTest::gtest GTest::gtest_main)
+
+loki_add_test_executable(loki_playback_tests
+    SOURCES
+        playback/playback_test.cpp
+    LIBS loki_test_support loki::playback loki::render GTest::gtest GTest::gtest_main)
+
 loki_add_test_executable(loki_app_tests
     SOURCES
         app/main_window_test.cpp
         app/theme_test.cpp
         ui/project_controller_test.cpp
+        ui/project_panel_test.cpp
+        ui/source_monitor_test.cpp
         qt_test_main.cpp
-    LIBS loki::app Qt6::Test GTest::gtest)
+    LIBS loki::app loki_test_support Qt6::Test GTest::gtest)

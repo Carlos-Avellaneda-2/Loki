@@ -26,6 +26,7 @@ struct MediaInfo {
     int audioChannels = 0;
     std::string videoCodec;
     std::string audioCodec;
+    bool isStill = false; // single image: no intrinsic duration
 
     friend bool operator==(const MediaInfo&, const MediaInfo&) = default;
 };
@@ -37,6 +38,9 @@ struct MediaItem {
     std::optional<std::filesystem::path> proxyPath;
     BinId bin; // null = project root
     MediaInfo info;
+    // Source Monitor In/Out marks (source time). Used by insert/overwrite.
+    std::optional<Rational> markIn;
+    std::optional<Rational> markOut;
 
     friend bool operator==(const MediaItem&, const MediaItem&) = default;
 };

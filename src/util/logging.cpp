@@ -3,6 +3,7 @@
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#include <chrono>
 #include <exception>
 #include <memory>
 #include <vector>
@@ -42,6 +43,8 @@ LogInitResult initLogging(const LogConfig& config) noexcept {
         logger->set_pattern(kPattern);
         logger->flush_on(spdlog::level::warn);
         spdlog::set_default_logger(logger);
+        // Info lines must reach the file even if the process dies without a warning.
+        spdlog::flush_every(std::chrono::seconds(1));
 
         if (!fileError.empty()) {
             spdlog::warn("File logging disabled: {}", fileError);

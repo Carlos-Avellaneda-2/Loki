@@ -9,7 +9,7 @@ include(FetchContent)
 find_package(spdlog CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
 qt_standard_project_setup()
 
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -32,3 +32,17 @@ if(LOKI_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
     find_package(Qt6 REQUIRED COMPONENTS Test)
 endif()
+
+# FFmpeg (vcpkg, LGPL build) exposed as one interface target with SYSTEM includes.
+find_package(FFMPEG REQUIRED)
+add_library(loki_ffmpeg INTERFACE)
+add_library(loki::ffmpeg ALIAS loki_ffmpeg)
+target_include_directories(loki_ffmpeg SYSTEM INTERFACE ${FFMPEG_INCLUDE_DIRS})
+target_link_directories(loki_ffmpeg INTERFACE ${FFMPEG_LIBRARY_DIRS})
+target_link_libraries(loki_ffmpeg INTERFACE ${FFMPEG_LIBRARIES})
+
+# miniaudio is header-only in vcpkg (no CMake config): expose the include dir as a target.
+find_path(MINIAUDIO_INCLUDE_DIR miniaudio.h REQUIRED)
+add_library(loki_miniaudio INTERFACE)
+add_library(loki::miniaudio ALIAS loki_miniaudio)
+target_include_directories(loki_miniaudio SYSTEM INTERFACE "${MINIAUDIO_INCLUDE_DIR}")

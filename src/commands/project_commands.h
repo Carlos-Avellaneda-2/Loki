@@ -61,6 +61,11 @@ private:
 
 [[nodiscard]] std::unique_ptr<Command> renameMedia(model::MediaId id, std::string name);
 [[nodiscard]] std::unique_ptr<Command> moveMediaToBin(model::MediaId id, model::BinId bin);
+// Source Monitor marks; nullopt clears a mark.
+[[nodiscard]] std::unique_ptr<Command> setMediaMarkIn(model::MediaId id, std::optional<Rational> in);
+[[nodiscard]] std::unique_ptr<Command> setMediaMarkOut(model::MediaId id, std::optional<Rational> out);
+// Fills in probed metadata (and proxy path) without touching user edits.
+[[nodiscard]] std::unique_ptr<Command> setMediaInfo(model::MediaId id, model::MediaInfo info);
 
 // ---------------------------------------------------------------------------------------------
 // Bins

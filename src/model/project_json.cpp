@@ -115,6 +115,15 @@ json mediaToJson(const MediaItem& m, const std::filesystem::path& projectDir) {
     if (m.proxyPath) {
         j["proxyPath"] = pathToUtf8(*m.proxyPath);
     }
+    if (m.info.isStill) {
+        j["info"]["isStill"] = true;
+    }
+    if (m.markIn) {
+        j["markIn"] = rationalToJson(*m.markIn);
+    }
+    if (m.markOut) {
+        j["markOut"] = rationalToJson(*m.markOut);
+    }
     return j;
 }
 
@@ -285,6 +294,16 @@ private:
         m.info.audioChannels = integer(info, "audioChannels", infoAt);
         m.info.videoCodec = string(info, "videoCodec", infoAt);
         m.info.audioCodec = string(info, "audioCodec", infoAt);
+        // Optional fields (added within v1; absent in older files).
+        if (info.contains("isStill")) {
+            m.info.isStill = boolean(info, "isStill", infoAt);
+        }
+        if (j.contains("markIn")) {
+            m.markIn = rational(j, "markIn", at);
+        }
+        if (j.contains("markOut")) {
+            m.markOut = rational(j, "markOut", at);
+        }
         return m;
     }
 

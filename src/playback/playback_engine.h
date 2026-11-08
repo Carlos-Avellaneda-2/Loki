@@ -1,0 +1,171 @@
+#pragma once
+
+#include "audio/audio_device.h"
+#include "media/video_frame.h"
+#include "model/types.h"
+#include "playback/playback_clock.h"
+
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+
+namespace loki::media {
+class AudioDecoder;
+class FrameCache;
+class VideoDecoder;
+} // namespace loki::media
+
+namespace loki::util {
+template <typename T>
+class SpscRing;
+} // namespace loki::util
+
+namespace loki::playback {
+
+struct PlaybackOptions {
+    audio::AudioDeviceFactory deviceFactory; // null: default miniaudio device
+    TimeSource timeSource;                   // null: steady_clock
+    std::size_t cacheBytes = 384u * 1024u * 1024u;
+    bool allowHardware = true;
+    int lookAheadFrames = 8;
+};
+
+struct PlaybackStats {
+    std::uint64_t framesShown = 0;
+    std::uint64_t framesDropped = 0;
+    std::uint64_t audioUnderruns = 0;
+    double lastSeekMs = 0;
+    std::string hwAccel;
+};
+
+// Plays one media file (Source Monitor). All decoding runs on an internal media thread; the UI
+// thread only posts requests and polls currentFrame()/position(), so it never blocks.
+// A/V sync: at 1x the audio device is the master clock; video frames are picked by that clock and
+// late frames are dropped instead of drifting.
+class PlaybackEngine {
+public:
+    explicit PlaybackEngine(PlaybackOptions options = {});
+    ~PlaybackEngine();
+    PlaybackEngine(const PlaybackEngine&) = delete;
+    PlaybackEngine& operator=(const PlaybackEngine&) = delete;
+    PlaybackEngine(PlaybackEngine&&) = delete;
+    PlaybackEngine& operator=(PlaybackEngine&&) = delete;
+
+    // Asynchronous. `info` comes from the project (probe); errors are reported by lastError().
+    void open(const std::filesystem::path& path, const model::MediaInfo& info);
+    void close();
+    [[nodiscard]] bool isOpen() const noexcept { return m_open.load(); }
+    // Increments every time an open() completes (successfully or not).
+    [[nodiscard]] std::uint64_t openCount() const noexcept { return m_openCount.load(); }
+    [[nodiscard]] std::string lastError() const;
+
+    void play() { setRate(1); }
+    void pause() { setRate(0); }
+    void togglePlay() { setRate(rate() == 0 ? 1 : 0); }
+    void setRate(int rate); // -8..8, 0 = pause
+    void shuttle(ShuttleKey key) { setRate(nextShuttleRate(rate(), key)); }
+    // Scrub/seek. The latest request wins; older pending ones are dropped. Keeps playing if playing.
+    void seek(const Rational& t);
+    // Pauses and moves by whole frames (arrow keys).
+    void stepFrames(int frames);
+    // Output size bound (playback resolution: full, 1/2, 1/4). 0 = source size.
+    void setQuality(int maxWidth, int maxHeight);
+
+    [[nodiscard]] Rational position() const;
+    [[nodiscard]] Rational duration() const;
+    [[nodiscard]] Rational frameRate() const;
+    [[nodiscard]] int rate() const noexcept { return m_requestedRate.load(); }
+    [[nodiscard]] bool isPlaying() const noexcept { return rate() != 0; }
+
+    // Frame to display now (UI thread, never blocks on decoding). May be null before the first
+    // frame is decoded or for audio-only media.
+    [[nodiscard]] media::VideoFramePtr currentFrame();
+
+    [[nodiscard]] PlaybackStats stats() const;
+    [[nodiscard]] bool hasAudioOutput() const noexcept { return m_device != nullptr; }
+
+    // Test helper: waits until pending requests were processed. Returns false on timeout.
+    bool waitIdle(int timeoutMs = 5000);
+
+private:
+    struct Requests {
+        std::optional<std::pair<std::filesystem::path, model::MediaInfo>> open;
+        bool close = false;
+        std::optional<Rational> seek;
+        std::optional<int> rate;
+        std::optional<std::pair<int, int>> quality;
+    };
+
+    void run(const std::stop_token& stop);
+    void process(Requests requests);
+    void doOpen(const std::filesystem::path& path, const model::MediaInfo& info);
+    void doClose();
+    void applyTransport(int rate, const Rational& position);
+    void showFrameAt(const Rational& t);
+    void fillForward();
+    void fillReverse();
+    void feedAudio();
+    void activateAudio(bool on);
+    void checkEnd();
+    void clearQueue();
+    [[nodiscard]] Rational clampTime(const Rational& t) const;
+    [[nodiscard]] std::int64_t frameIndexOf(const Rational& t) const;
+    void audioCallback(float* out, std::size_t frames) noexcept;
+
+    PlaybackOptions m_options;
+    PlaybackClock m_clock;
+    std::unique_ptr<audio::AudioDevice> m_device;
+    std::unique_ptr<util::SpscRing<float>> m_ring;
+    std::unique_ptr<media::FrameCache> m_cache;
+
+    // Media-thread state.
+    std::unique_ptr<media::VideoDecoder> m_video;
+    std::unique_ptr<media::AudioDecoder> m_audio;
+    std::string m_cacheSource;
+    int m_activeRate = 0;
+    Rational m_reverseNext;
+    bool m_reverseDone = false;
+    bool m_videoEof = false;
+    int m_maxWidth = 0;
+    int m_maxHeight = 0;
+    std::vector<float> m_audioScratch;
+
+    // Shared, read by the UI thread.
+    std::atomic<bool> m_open{false};
+    std::atomic<std::uint64_t> m_openCount{0};
+    std::atomic<int> m_requestedRate{0};
+    mutable std::mutex m_infoMutex;
+    Rational m_duration;
+    Rational m_frameRate{30};
+    std::string m_error;
+
+    mutable std::mutex m_displayMutex;
+    std::deque<media::VideoFramePtr> m_queue; // forward: ascending pts; reverse: descending
+    media::VideoFramePtr m_current;
+    media::VideoFramePtr m_lastCounted;
+
+    std::atomic<bool> m_audioActive{false};
+    std::atomic<std::uint64_t> m_callbacks{0};
+    std::atomic<std::uint64_t> m_underruns{0};
+    std::atomic<std::uint64_t> m_shown{0};
+    std::atomic<std::uint64_t> m_dropped{0};
+    std::atomic<double> m_lastSeekMs{0};
+    std::string m_hwName;
+
+    std::mutex m_requestMutex;
+    std::condition_variable_any m_wake;
+    std::condition_variable m_idle;
+    Requests m_requests;
+    bool m_pending = false;
+    bool m_busy = false;
+    std::jthread m_thread; // last: started after everything above exists, joined first
+};
+
+} // namespace loki::playback

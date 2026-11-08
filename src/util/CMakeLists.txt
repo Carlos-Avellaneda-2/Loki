@@ -3,6 +3,9 @@ add_library(loki_util STATIC
     atomic_file.cpp
     logging.h
     logging.cpp
+    spsc_ring.h
+    task_pool.h
+    task_pool.cpp
     rational.h
     rational.cpp
     timecode.h

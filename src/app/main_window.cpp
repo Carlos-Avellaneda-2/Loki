@@ -2,7 +2,11 @@
 
 #include "model/project_json.h"
 #include "ui/panel_factory.h"
+#include "app/preferences_dialog.h"
+#include "ui/media_services.h"
 #include "ui/project_controller.h"
+#include "ui/project_panel.h"
+#include "ui/source_monitor_panel.h"
 
 #include <DockAreaWidget.h>
 #include <DockManager.h>
@@ -38,9 +42,11 @@ constexpr std::size_t indexOf(ui::PanelId id) noexcept {
 
 } // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOptions)
+    : QMainWindow(parent), m_playbackOptions(std::move(playbackOptions)) {
     resize(1280, 720);
     m_controller = new ui::ProjectController(this);
+    m_services = new ui::MediaServices(*m_controller, ui::configuredCacheDirectory(), this);
     connect(m_controller, &ui::ProjectController::modifiedChanged, this, &MainWindow::updateTitle);
     connect(m_controller, &ui::ProjectController::filePathChanged, this, &MainWindow::updateTitle);
     connect(m_controller, &ui::ProjectController::commandFailed, this,
@@ -70,9 +76,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     createDockWidgets();
     createMenus();
+    connect(m_projectPanel, &ui::ProjectPanel::mediaActivated, this, [this](model::MediaId id) {
+        m_sourceMonitor->loadMedia(id);
+        dockWidget(ui::PanelId::SourceMonitor)->raise();
+    });
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    // Panels reference the controller and media services: destroy them (with the dock manager)
+    // before Qt deletes the remaining children in creation order.
+    delete m_dockManager; // NOLINT(cppcoreguidelines-owning-memory): Qt child, deleted early on purpose
+    m_dockManager = nullptr;
+}
 
 ads::CDockWidget* MainWindow::dockWidget(ui::PanelId id) const noexcept {
     return m_docks[indexOf(id)];
@@ -82,7 +97,7 @@ void MainWindow::createDockWidgets() {
     for (const auto id : ui::kAllPanels) {
         auto* dock = new ads::CDockWidget(m_dockManager, toQString(ui::panelTitle(id)));
         dock->setObjectName(toQString(ui::panelObjectName(id)));
-        dock->setWidget(ui::createPanel(id), ads::CDockWidget::ForceNoScrollArea);
+        dock->setWidget(createPanelWidget(id), ads::CDockWidget::ForceNoScrollArea);
         dock->setFeature(ads::CDockWidget::DockWidgetClosable, true);
         dock->setFeature(ads::CDockWidget::DockWidgetMovable, true);
         dock->setFeature(ads::CDockWidget::DockWidgetFloatable, true);
@@ -104,6 +119,20 @@ void MainWindow::createDockWidgets() {
     sourceArea->setCurrentDockWidget(dockWidget(PanelId::SourceMonitor));
     // Relative widths of the bottom row (Project | Timeline | Audio Meters); QSplitter rescales them.
     m_dockManager->setSplitterSizes(timelineArea, {300, 900, 150});
+}
+
+QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
+    switch (id) {
+    case ui::PanelId::Project: {
+        m_projectPanel = new ui::ProjectPanel(*m_controller, *m_services);
+        return m_projectPanel;
+    }
+    case ui::PanelId::SourceMonitor: {
+        m_sourceMonitor = new ui::SourceMonitorPanel(*m_controller, *m_services, m_playbackOptions);
+        return m_sourceMonitor;
+    }
+    default: return ui::createPanel(id);
+    }
 }
 
 void MainWindow::createMenus() {
@@ -131,9 +160,19 @@ void MainWindow::createMenus() {
     quitAction->setMenuRole(QAction::QuitRole);
     connect(quitAction, &QAction::triggered, this, &QWidget::close);
 
+    fileMenu->insertAction(saveAction, m_projectPanel->importAction());
+    fileMenu->insertSeparator(saveAction);
+
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
     editMenu->addAction(m_controller->undoAction());
     editMenu->addAction(m_controller->redoAction());
+    editMenu->addSeparator();
+    auto* preferences = editMenu->addAction(tr("&Preferences..."));
+    preferences->setMenuRole(QAction::PreferencesRole);
+    connect(preferences, &QAction::triggered, this, [this] {
+        PreferencesDialog dialog(*m_services, this);
+        dialog.exec();
+    });
 
     auto* windowMenu = menuBar()->addMenu(tr("&Window"));
     for (const auto id : ui::kAllPanels) {

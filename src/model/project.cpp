@@ -215,6 +215,9 @@ std::vector<std::string> Project::validate() const {
     }
     for (const auto& media : m_media) {
         unique(media.id.uuid(), "media");
+        if (media.markIn && media.markOut && !(*media.markIn < *media.markOut)) {
+            problems.push_back("media " + media.id.toString() + " has In not before Out");
+        }
         if (!media.bin.isNull() && findBin(media.bin) == nullptr) {
             problems.push_back("media " + media.id.toString() + " is in unknown bin");
         }
@@ -266,7 +269,21 @@ void Project::notify(const ChangeEvent& event) const {
 // ---------------------------------------------------------------------------------------------
 // ProjectMutator
 
+namespace {
+
+void checkMarks(const MediaItem& item) {
+    if (item.markIn && item.markOut && !(*item.markIn < *item.markOut)) {
+        fail("media In mark must be before Out mark");
+    }
+    if ((item.markIn && item.markIn->isNegative()) || (item.markOut && item.markOut->isNegative())) {
+        fail("media marks must not be negative");
+    }
+}
+
+} // namespace
+
 void ProjectMutator::insertMedia(std::size_t index, MediaItem item) {
+    checkMarks(item);
     auto& media = m_project.m_media;
     if (item.id.isNull() || m_project.findMedia(item.id) != nullptr) {
         fail("media id is null or already used");
@@ -301,6 +318,7 @@ MediaItem ProjectMutator::removeMedia(MediaId id, std::size_t* indexOut) {
 }
 
 void ProjectMutator::replaceMedia(MediaItem item) {
+    checkMarks(item);
     auto& media = m_project.m_media;
     const auto it = findById(media, item.id);
     if (it == media.end()) {

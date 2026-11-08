@@ -8,11 +8,14 @@ Objetivo: que Loki se pueda distribuir cumpliendo la **LGPL** de FFmpeg y Qt, si
 |---|---|---|---|
 | Qt 6 (Core, Gui, Widgets) | LGPL-3.0 | Dinámico (DLL precompiladas) | Se distribuyen las DLL tal cual; el usuario puede reemplazarlas. Aviso de licencia y enlace al código fuente de Qt. |
 | Qt Advanced Docking System | LGPL-2.1 | Dinámico (`qtadvanceddocking-qt6.dll`) | Compilado desde la etiqueta v5.1.1 sin modificaciones; se distribuye la DLL junto con su aviso de licencia. |
-| FFmpeg (Fase 3+) | LGPL-2.1+ | Dinámico (DLL de vcpkg) | Se compila **sin** `--enable-gpl` ni `--enable-nonfree`. Se documenta la configuración usada y se ofrece el código fuente. |
+| FFmpeg 8 (vcpkg) | LGPL-2.1+ | Dinámico (DLL de vcpkg) | Features: avcodec, avformat, swresample, swscale, nvcodec, qsv, amf, openh264 y zlib. **Sin** `gpl`, `nonfree` ni `version3`. Se documenta la configuración usada y se ofrece el código fuente. |
 | OpenH264 (Fase 10) | BSD-2-Clause | Dinámico | Encoder H.264 por software de respaldo. Ver la nota de patentes más abajo. |
 | spdlog / fmt | MIT | Estático o dinámico | Aviso de licencia en la distribución. |
 | nlohmann/json | MIT | Solo cabeceras | Aviso de licencia. |
-| miniaudio | Dominio público / MIT-0 | Solo cabeceras | — |
+| miniaudio | Dominio público / MIT-0 | Solo cabeceras (una TU con la implementación) | — |
+| libvpl (QSV) | MIT | Dinámico | Dependencia de la feature `qsv` de FFmpeg. |
+| nv-codec-headers | MIT | Solo cabeceras | NVDEC/NVENC se cargan en tiempo de ejecución desde el driver. |
+| AMF headers | MIT | Solo cabeceras | — |
 | GoogleTest | BSD-3-Clause | Solo en tests | No se distribuye. |
 
 ## Codificación H.264

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "playback/playback_engine.h"
 #include "ui/panel_id.h"
 
 #include <QByteArray>
@@ -12,7 +13,10 @@ class QCloseEvent;
 class QSettings;
 
 namespace loki::ui {
+class MediaServices;
 class ProjectController;
+class ProjectPanel;
+class SourceMonitorPanel;
 } // namespace loki::ui
 
 namespace ads {
@@ -32,7 +36,8 @@ public:
     // Bump when the default panel set changes so stale saved layouts are ignored.
     static constexpr int kLayoutVersion = 1;
 
-    explicit MainWindow(QWidget* parent = nullptr);
+    // playbackOptions: tests inject a fake audio device / clock.
+    explicit MainWindow(QWidget* parent = nullptr, playback::PlaybackOptions playbackOptions = {});
     ~MainWindow() override;
 
     MainWindow(const MainWindow&) = delete;
@@ -51,6 +56,9 @@ public:
     bool restoreSettings(const QSettings& settings);
 
     [[nodiscard]] ui::ProjectController* projectController() const noexcept { return m_controller; }
+    [[nodiscard]] ui::MediaServices* mediaServices() const noexcept { return m_services; }
+    [[nodiscard]] ui::ProjectPanel* projectPanel() const noexcept { return m_projectPanel; }
+    [[nodiscard]] ui::SourceMonitorPanel* sourceMonitor() const noexcept { return m_sourceMonitor; }
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -58,6 +66,7 @@ protected:
 private:
     void createDockWidgets();
     void createMenus();
+    QWidget* createPanelWidget(ui::PanelId id);
     void updateTitle();
     void openProject();
     bool save();
@@ -67,6 +76,10 @@ private:
     [[nodiscard]] static QString projectFileFilter();
 
     ui::ProjectController* m_controller = nullptr; // owned by this window (Qt parent)
+    ui::MediaServices* m_services = nullptr;       // owned by this window (Qt parent)
+    ui::ProjectPanel* m_projectPanel = nullptr;    // owned by its dock widget
+    ui::SourceMonitorPanel* m_sourceMonitor = nullptr; // owned by its dock widget
+    playback::PlaybackOptions m_playbackOptions;
     ads::CDockManager* m_dockManager = nullptr;    // owned by this window (Qt parent)
     std::array<ads::CDockWidget*, ui::kAllPanels.size()> m_docks{};
 };

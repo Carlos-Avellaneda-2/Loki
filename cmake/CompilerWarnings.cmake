@@ -12,6 +12,7 @@ function(loki_set_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE
             /W4 /WX
+            /wd4324 # structure padded due to alignas (intentional: false-sharing avoidance)
             /external:anglebrackets /external:W0
             /w14242 # conversion, possible loss of data
             /w14254 # larger bit field assigned to smaller

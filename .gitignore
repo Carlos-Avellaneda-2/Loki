@@ -22,3 +22,6 @@ Thumbs.db
 
 # Tool logs
 aqtinstall.log
+
+# graphify knowledge graph output
+graphify-out/

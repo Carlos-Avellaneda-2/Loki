@@ -88,6 +88,29 @@ std::unique_ptr<Command> moveMediaToBin(MediaId id, BinId bin) {
     return std::make_unique<EditMediaCommand>(id, "Move to Bin", [bin](MediaItem& m) { m.bin = bin; });
 }
 
+std::unique_ptr<Command> setMediaMarkIn(MediaId id, std::optional<Rational> in) {
+    return std::make_unique<EditMediaCommand>(id, in ? "Mark In" : "Clear In", [in](MediaItem& m) {
+        m.markIn = in;
+        if (in && m.markOut && !(*in < *m.markOut)) {
+            m.markOut.reset(); // like Premiere: a new In past the Out clears the Out
+        }
+    });
+}
+
+std::unique_ptr<Command> setMediaMarkOut(MediaId id, std::optional<Rational> out) {
+    return std::make_unique<EditMediaCommand>(id, out ? "Mark Out" : "Clear Out", [out](MediaItem& m) {
+        m.markOut = out;
+        if (out && m.markIn && !(*m.markIn < *out)) {
+            m.markIn.reset();
+        }
+    });
+}
+
+std::unique_ptr<Command> setMediaInfo(MediaId id, MediaInfo info) {
+    return std::make_unique<EditMediaCommand>(id, "Update Media Info",
+                                              [info = std::move(info)](MediaItem& m) { m.info = info; });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Bins
 

@@ -2,6 +2,8 @@
 add_library(loki_app STATIC
     main_window.h
     main_window.cpp
+    preferences_dialog.h
+    preferences_dialog.cpp
     theme.h
     theme.cpp
     qt_log_bridge.h
