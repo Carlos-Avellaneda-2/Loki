@@ -37,6 +37,11 @@ loki_add_test_executable(loki_render_tests
         render/grading_test.cpp
     LIBS loki::render_core GTest::gtest GTest::gtest_main)
 
+loki_add_test_executable(loki_export_tests
+    SOURCES
+        export/export_test.cpp
+    LIBS loki_test_support loki::export loki::media GTest::gtest GTest::gtest_main)
+
 loki_add_test_executable(loki_audio_tests
     SOURCES
         audio/mixer_test.cpp
@@ -93,6 +98,7 @@ loki_add_test_executable(loki_app_tests
     SOURCES
         app/main_window_test.cpp
         ui/audio_panels_test.cpp
+        ui/export_dialog_test.cpp
         app/theme_test.cpp
         ui/project_controller_test.cpp
         ui/project_panel_test.cpp
@@ -106,10 +112,10 @@ loki_add_test_executable(loki_app_tests
 
 # Real OpenGL compositor test: runs on the native platform (needs a GPU with OpenGL 3.3; skipped
 # when unavailable, e.g. on CI runners).
-add_executable(loki_gl_tests render/gl_compositor_test.cpp)
-target_link_libraries(loki_gl_tests PRIVATE loki::render GTest::gtest)
+add_executable(loki_gl_tests render/gl_compositor_test.cpp render/gpu_export_test.cpp)
+target_link_libraries(loki_gl_tests PRIVATE loki::render loki::export loki_test_support GTest::gtest)
 loki_set_warnings(loki_gl_tests)
-gtest_add_tests(TARGET loki_gl_tests SOURCES render/gl_compositor_test.cpp TEST_LIST _gl_tests)
+gtest_add_tests(TARGET loki_gl_tests SOURCES render/gl_compositor_test.cpp render/gpu_export_test.cpp TEST_LIST _gl_tests)
 set_tests_properties(${_gl_tests} PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${LOKI_QT_BIN_DIR};QT_QPA_PLATFORM=set:windows"
     TIMEOUT 60)

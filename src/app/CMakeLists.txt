@@ -1,5 +1,7 @@
 # loki_app: main window, theme and app wiring (linked by the executable and by UI tests).
 add_library(loki_app STATIC
+    export_dialog.h
+    export_dialog.cpp
     main_window.h
     main_window.cpp
     preferences_dialog.h
@@ -24,6 +26,7 @@ target_link_libraries(loki_app
     PUBLIC
         Qt6::Widgets
         loki::ui
+        loki::export
         loki::util
         ads::qtadvanceddocking
 )

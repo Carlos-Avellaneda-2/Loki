@@ -13,6 +13,7 @@
 #include "ui/audio_mixer_panel.h"
 #include "ui/effect_controls_panel.h"
 #include "ui/effects_panel.h"
+#include "app/export_dialog.h"
 #include "commands/effect_commands.h"
 #include "commands/transition_commands.h"
 #include "ui/program_monitor_panel.h"
@@ -193,6 +194,17 @@ void MainWindow::sourceEdit(model::MediaId media, bool insert) {
     }
 }
 
+void MainWindow::exportMedia() {
+    if (m_controller->project().findSequence(m_activeSequence) == nullptr) {
+        statusBar()->showMessage(tr("No active sequence"), 4000);
+        return;
+    }
+    ExportDialog dialog(*m_controller, m_activeSequence, this);
+    connect(&dialog, &ExportDialog::exportFinished, this,
+            [this](bool, const QString& message) { statusBar()->showMessage(message, 8000); });
+    dialog.exec();
+}
+
 void MainWindow::newTitle() {
     const auto& project = m_controller->project();
     const auto* sequence = project.findSequence(m_activeSequence);
@@ -349,6 +361,11 @@ void MainWindow::createMenus() {
                       QKeySequence(Qt::CTRL | Qt::Key_T));
     connect(titleAction, &QAction::triggered, this, &MainWindow::newTitle);
     fileMenu->insertAction(saveAction, titleAction);
+    auto* exportAction = new QAction(tr("&Export Media..."), this);
+    m_shortcuts->bind(exportAction, QStringLiteral("app.exportMedia"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext),
+                      QKeySequence(Qt::CTRL | Qt::Key_M));
+    connect(exportAction, &QAction::triggered, this, &MainWindow::exportMedia);
+    fileMenu->insertAction(saveAction, exportAction);
     fileMenu->insertSeparator(saveAction);
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));

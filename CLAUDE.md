@@ -96,7 +96,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 7. Edición avanzada — ripple/roll/slip/slide, ripple delete, lift/extract con marcas In/Out de secuencia, link/unlink, ShortcutManager + diálogo de atajos, 285 tests
 - [x] 8. Audio — audio/mixer puro, SequenceAudioSource multipista (vol/pan clip+pista, mute/solo, master, fades), medidores con reloj, Audio Meters + Audio Track Mixer, línea de volumen y fades en timeline, copiar/cortar/pegar, 313 tests
 - [x] 9. Transiciones, color, títulos — formato v2 (transiciones en pista, medios generados, parámetros texto), disolución/fundido a negro/barrido + crossfade audio, Color/LUT .cube en shader, títulos QtGui, compositor CPU de referencia, panel Efectos, 331 tests
-- [ ] 10. Exportación
+- [x] 10. Exportación — módulo export (ExportJob, MediaWriter FFmpeg, renderer GPU offscreen + respaldo CPU), encoders LGPL con autodetección (QSV en la máquina del usuario), presets H.264/HEVC/ProRes/WAV, diálogo con progreso/cancelar
 - [ ] 11. Robustez y rendimiento
 
 - D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],

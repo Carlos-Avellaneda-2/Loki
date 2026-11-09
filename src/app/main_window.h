@@ -77,6 +77,8 @@ public:
     [[nodiscard]] ui::EffectsPanel* effectsPanel() const noexcept { return m_effects; }
     // File > New > Title: a title clip at the Program playhead on the targeted video track.
     void newTitle();
+    // File > Export > Media (Ctrl+M).
+    void exportMedia();
     [[nodiscard]] model::SequenceId activeSequence() const noexcept { return m_activeSequence; }
     // Insert/Overwrite from the Source Monitor at the Program playhead (public for tests).
     void sourceEdit(model::MediaId media, bool insert);

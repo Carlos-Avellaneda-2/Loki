@@ -31,6 +31,9 @@ Los encoders por hardware se usan a través de las APIs del fabricante (nv-codec
 
 Audio AAC: encoder nativo `aac` de FFmpeg (LGPL).
 
+HEVC solo por hardware (`hevc_nvenc`, `hevc_qsv`, `hevc_amf`); nunca `libx265` (D23). ProRes: `prores_ks`, nativo
+de FFmpeg (LGPL). WAV: `pcm_s16le`.
+
 ## Prohibido sin aprobación explícita
 
 - `libx264`, `libx265`, `libxvid`, `libvidstab` y `frei0r`, o cualquier componente que requiera `--enable-gpl`.

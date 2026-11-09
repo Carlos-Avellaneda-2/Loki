@@ -383,10 +383,36 @@ sequenceDiagram
 
 ## 8. Export
 
-- Mismo grafo que playback, reloj "offline" (frame a frame), sumidero = encoder.
-- Encoders H.264: `h264_nvenc` → `h264_qsv` → `h264_amf` → `libopenh264` (fallback software). AAC: encoder
-  nativo `aac` de FFmpeg. Sin GPL (ver `docs/LICENSING.md`, a crear en Fase 1).
-- Corre en hilo propio, con progreso y cancelación cooperativa.
+Implementado en la Fase 10 (D22, D23), en el módulo `export` (namespace `loki::exporter`).
+
+- `ExportJob` recorre el rango fotograma a fotograma, con un reloj "offline".
+  - Usa las mismas fuentes que la vista previa: `SequenceVideoSource` a resolución completa y
+    `SequenceAudioSource`.
+  - Cada composición pasa por un `FrameRenderer`:
+    - El GPU usa el mismo `GlCompositor` en un `QOpenGLContext` del hilo de exportación, sobre un
+      `QOffscreenSurface` creado en el hilo de UI.
+    - El CPU (`compositeCpu`) es el respaldo si OpenGL 3.3 no arranca.
+  - El audio se escribe hasta el final de cada fotograma con posiciones de muestra exactas, sin deriva.
+- `MediaWriter` (FFmpeg):
+  - Convierte RGBA a YUV BT.709 de rango limitado con swscale.
+  - Elige el formato de píxel que acepte el encoder (NV12, yuv420p o yuv422p10 para ProRes).
+  - Audio: AAC por FIFO en tramas de 1024 muestras, o PCM s16.
+- Encoders (`encoders.h`), en orden de preferencia:
+  - H.264: `h264_nvenc` → `h264_qsv` → `h264_amf` → `libopenh264`.
+  - HEVC: solo hardware (D23).
+  - ProRes: `prores_ks`.
+  - `pickEncoder` prueba abrir cada uno en esta máquina y guarda el resultado. En la máquina del usuario elige
+    `h264_qsv`.
+- Presets:
+  - H.264: igual a la secuencia, 1080p a 16 Mb/s y 720p a 8 Mb/s.
+  - HEVC: igual a la secuencia.
+  - ProRes 422 HQ (.mov) con PCM.
+  - WAV de solo audio.
+  - Si no se fija la tasa, se usa ≈ 0,12 bits por píxel por fotograma.
+- `app::ExportDialog` (Archivo > Exportar medios, Ctrl+M):
+  - Corre `ExportJob` en un `std::jthread`, con barra de progreso y Cancelar.
+  - Al cancelar o fallar borra el archivo parcial.
+  - Recuerda el último preset y la última carpeta.
 
 ## 9. Persistencia y robustez
 
