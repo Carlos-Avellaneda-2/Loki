@@ -1,6 +1,9 @@
 #include "ui/timeline/timeline_view.h"
 
+#include "commands/effect_commands.h"
 #include "commands/project_commands.h"
+#include "model/effect_registry.h"
+#include "ui/audio_scale.h"
 #include "ui/media_services.h"
 #include "ui/project_controller.h"
 #include "ui/project_item_model.h"
@@ -46,8 +49,34 @@ QRect lockRect(const TrackRow& row) {
 QRect visibilityRect(const TrackRow& row) {
     return {TimelineView::kHeaderWidth - (kButton + 6), row.top + (row.height - kButton) / 2, kButton, kButton};
 }
+// Audio rows: solo, left of the lock.
+QRect soloRect(const TrackRow& row) {
+    return {TimelineView::kHeaderWidth - 3 * (kButton + 6), row.top + (row.height - kButton) / 2, kButton, kButton};
+}
 QRect targetRect(const TrackRow& row) {
     return {4, row.top + (row.height - kButton) / 2, kButton + 4, kButton};
+}
+
+// Audio overlay geometry inside a clip rectangle.
+constexpr double kNameBar = 12.0;
+constexpr double kFadeHandle = 7.0;
+constexpr double kLevelMaxDb = 15.0;
+constexpr double kLevelGrab = 4.0;
+
+QRectF levelArea(const QRectF& clipRect) {
+    return clipRect.adjusted(1, kNameBar, -1, -2);
+}
+double levelY(const QRectF& area, double db) {
+    return area.bottom() - dbToScale(db, kLevelMaxDb) * area.height();
+}
+double levelDbAt(const model::Clip& clip, const Rational& t) {
+    return model::resolveAudioMix(clip, clip.toSourceTime(t)).levelDb;
+}
+QRectF fadeInHandle(const QRectF& r, double fadePx) {
+    return {std::min(r.left() + fadePx, r.right() - kFadeHandle), r.top() + kNameBar, kFadeHandle, kFadeHandle};
+}
+QRectF fadeOutHandle(const QRectF& r, double fadePx) {
+    return {std::max(r.right() - fadePx - kFadeHandle, r.left()), r.top() + kNameBar, kFadeHandle, kFadeHandle};
 }
 
 } // namespace
@@ -342,8 +371,14 @@ void TimelineView::paintHeaders(QPainter& p, const std::vector<TrackRow>& rowLis
         p.drawText(target, Qt::AlignCenter, row.kind == model::TrackKind::Video ? QStringLiteral("V") : QStringLiteral("A"));
         // Name.
         p.setPen(kText);
-        p.drawText(QRect(target.right() + 8, row.top, 60, row.height), Qt::AlignVCenter | Qt::AlignLeft,
-                   qs(track->state.name));
+        p.drawText(QRect(target.right() + 8, row.top, soloRect(row).left() - target.right() - 10, row.height),
+                   Qt::AlignVCenter | Qt::AlignLeft, qs(track->state.name));
+        if (row.kind == model::TrackKind::Audio) {
+            const QRect solo = soloRect(row);
+            p.fillRect(solo, track->state.solo ? QColor(0xc8, 0xb0, 0x2a) : QColor(0x3a, 0x3a, 0x3a));
+            p.setPen(track->state.solo ? Qt::black : kDimText);
+            p.drawText(solo, Qt::AlignCenter, QStringLiteral("S"));
+        }
         // Lock.
         const QRect lock = lockRect(row);
         p.fillRect(lock, track->state.locked ? QColor(0xc8, 0x8a, 0x2a) : QColor(0x3a, 0x3a, 0x3a));
@@ -408,6 +443,9 @@ void TimelineView::paintClip(QPainter& p, const QRectF& r, const model::Clip& cl
     if (kind == model::TrackKind::Audio && media != nullptr) {
         paintWaveform(p, body.adjusted(1, 12, -1, -1), clip);
     }
+    if (kind == model::TrackKind::Audio && r.width() > 3 * kFadeHandle) {
+        paintAudioOverlay(p, r, clip);
+    }
     // Name bar.
     if (r.width() > 12) {
         p.setPen(selected ? Qt::white : kText);
@@ -422,6 +460,109 @@ void TimelineView::paintClip(QPainter& p, const QRectF& r, const model::Clip& cl
         p.setBrush(Qt::NoBrush);
         p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
     }
+}
+
+QRectF TimelineView::clipRect(const TrackRow& row, const model::Clip& clip) const {
+    const double x0 = kHeaderWidth + timeToX(clip.start, m_metrics);
+    const double x1 = kHeaderWidth + timeToX(clip.end(), m_metrics);
+    return {x0, static_cast<double>(row.top + 2), std::max(1.0, x1 - x0 - 1), static_cast<double>(row.height - 5)};
+}
+
+void TimelineView::paintAudioOverlay(QPainter& p, const QRectF& r, const model::Clip& clip) const {
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF area = levelArea(r);
+    const double pps = m_metrics.pixelsPerSecond;
+    // Fade shading: the silent side of an equal-power curve.
+    const auto shadeFade = [&](bool in, double seconds) {
+        if (!(seconds > 0.0)) {
+            return;
+        }
+        const double w = std::min(seconds * pps, r.width());
+        QPolygonF poly;
+        const int steps = std::max(2, static_cast<int>(w / 3));
+        for (int i = 0; i <= steps; ++i) {
+            const double x01 = static_cast<double>(i) / steps;
+            const double g = audio::fadeGain(in ? x01 : 1.0 - x01);
+            const double x = in ? r.left() + x01 * w : r.right() - w + x01 * w;
+            poly << QPointF(x, area.bottom() - g * area.height());
+        }
+        poly << QPointF(in ? r.left() + w : r.right() - w, area.top())
+             << QPointF(in ? r.left() : r.right(), area.top());
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 90));
+        p.drawPolygon(poly);
+    };
+    shadeFade(true, clip.fadeIn.toDouble());
+    shadeFade(false, clip.fadeOut.toDouble());
+
+    // Volume line (Volume > Level), sampled every few pixels so keyframes show as slopes.
+    const double xFrom = std::max(area.left(), static_cast<double>(kHeaderWidth));
+    const double xTo = std::min(area.right(), static_cast<double>(width()));
+    QPolygonF line;
+    for (double x = xFrom; x <= xTo + 0.5; x += 3.0) {
+        const double cx = std::min(x, xTo);
+        line << QPointF(cx, levelY(area, levelDbAt(clip, max(clip.start, min(timeAt(cx), clip.end())))));
+    }
+    p.setPen(QPen(QColor(0xf0, 0xe0, 0x60), 1.2));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolyline(line);
+    if (const auto* effect = model::findEffectByType(clip, model::kVolumeEffect)) {
+        if (const auto* level = effect->findParameter("level"); level != nullptr && level->isAnimated()) {
+            p.setBrush(QColor(0xf0, 0xe0, 0x60));
+            for (const auto& k : level->keyframes) {
+                const double x = r.left() + (k.time - clip.sourceIn).toDouble() * pps;
+                if (x < r.left() || x > r.right()) {
+                    continue;
+                }
+                const double y = levelY(area, k.value);
+                const QPointF diamond[] = {{x, y - 4}, {x + 4, y}, {x, y + 4}, {x - 4, y}};
+                p.drawPolygon(diamond, 4);
+            }
+        }
+    }
+    // Fade handles.
+    p.setPen(QPen(QColor(0xff, 0xff, 0xff, 200), 1));
+    p.setBrush(QColor(0x20, 0x20, 0x20, 200));
+    p.drawRect(fadeInHandle(r, clip.fadeIn.toDouble() * pps));
+    p.drawRect(fadeOutHandle(r, clip.fadeOut.toDouble() * pps));
+    p.restore();
+}
+
+TimelineView::AudioHit TimelineView::audioHitAt(const QPoint& pos) const {
+    const auto* seq = sequence();
+    if (seq == nullptr || m_tool != Tool::Selection || pos.x() < kHeaderWidth) {
+        return {};
+    }
+    const auto rowList = rows();
+    const auto* row = rowAt(rowList, pos.y());
+    if (row == nullptr || row->kind != model::TrackKind::Audio) {
+        return {};
+    }
+    const auto* track = trackOf(*row);
+    if (track == nullptr || track->state.locked) {
+        return {};
+    }
+    const double pps = m_metrics.pixelsPerSecond;
+    for (const auto& clip : track->clips) {
+        const QRectF r = clipRect(*row, clip);
+        if (!r.adjusted(-2, 0, 2, 0).contains(pos) || r.width() <= 3 * kFadeHandle) {
+            continue;
+        }
+        if (fadeInHandle(r, clip.fadeIn.toDouble() * pps).adjusted(-2, -2, 2, 2).contains(pos)) {
+            return {AudioHandle::FadeIn, clip.id};
+        }
+        if (fadeOutHandle(r, clip.fadeOut.toDouble() * pps).adjusted(-2, -2, 2, 2).contains(pos)) {
+            return {AudioHandle::FadeOut, clip.id};
+        }
+        const QRectF area = levelArea(r);
+        const Rational t = max(clip.start, min(timeAt(pos.x()), clip.end()));
+        if (std::abs(pos.y() - levelY(area, levelDbAt(clip, t))) <= kLevelGrab) {
+            return {AudioHandle::Level, clip.id};
+        }
+        return {};
+    }
+    return {};
 }
 
 void TimelineView::paintWaveform(QPainter& p, const QRectF& r, const model::Clip& clip) const {
@@ -558,7 +699,9 @@ void TimelineView::headerClick(const TrackRow& row, const QPoint& pos) {
         return;
     }
     const auto& project = m_controller.project();
-    if (lockRect(row).contains(pos)) {
+    if (row.kind == model::TrackKind::Audio && soloRect(row).contains(pos)) {
+        runEdit([&] { return commands::setTrackSolo(project, track->id, !track->state.solo); });
+    } else if (lockRect(row).contains(pos)) {
         runEdit([&] { return commands::setTrackLocked(project, track->id, !track->state.locked); });
     } else if (visibilityRect(row).contains(pos)) {
         runEdit([&] {
@@ -596,6 +739,40 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
     }
     if (pos.x() < kHeaderWidth) {
         headerClick(*row, pos);
+        return;
+    }
+    if (const auto audioHit = audioHitAt(pos); audioHit.handle != AudioHandle::None) {
+        const auto ref = m_controller.project().findClip(audioHit.clip);
+        m_dragClip = audioHit.clip;
+        m_dragStart = pos;
+        m_dragGesture = m_controller.newGestureId();
+        if (audioHit.handle == AudioHandle::Level) {
+            const Rational at = max(ref.clip->start, min(timeAt(pos.x()), ref.clip->end()));
+            m_dragSourceTime = ref.clip->toSourceTime(at);
+            if (event->modifiers().testFlag(Qt::ControlModifier)) {
+                // Ctrl+click: keyframe on the line at this time (starts animating if needed).
+                const auto* effect = model::findEffectByType(*ref.clip, model::kVolumeEffect);
+                const auto* level = effect != nullptr ? effect->findParameter("level") : nullptr;
+                const auto sourceTime = m_dragSourceTime;
+                const auto clipId = audioHit.clip;
+                if (level != nullptr && level->isAnimated()) {
+                    const double db = model::resolveAudioMix(*ref.clip, sourceTime).levelDb;
+                    runEdit([&] {
+                        return commands::setEffectParameter(m_controller.project(), clipId, model::kVolumeEffect,
+                                                            "level", db, sourceTime);
+                    });
+                } else {
+                    runEdit([&] {
+                        return commands::setParameterAnimated(m_controller.project(), clipId, model::kVolumeEffect,
+                                                              "level", true, sourceTime);
+                    });
+                }
+                return;
+            }
+            m_drag = Drag::Volume;
+        } else {
+            m_drag = audioHit.handle == AudioHandle::FadeIn ? Drag::FadeIn : Drag::FadeOut;
+        }
         return;
     }
     const auto hit = hitTest(*seq, rowList, m_metrics, contentX(pos.x()), pos.y());
@@ -721,6 +898,50 @@ void TimelineView::mouseMoveEvent(QMouseEvent* event) {
         update();
         return;
     }
+    case Drag::Volume: {
+        const auto rowList = rows();
+        const auto ref = m_controller.project().findClip(m_dragClip);
+        const auto* row = rowAt(rowList, m_dragStart.y());
+        if (ref.clip == nullptr || row == nullptr) {
+            return;
+        }
+        const QRectF area = levelArea(clipRect(*row, *ref.clip));
+        const double db = std::round(scaleToDb((area.bottom() - pos.y()) / area.height(), kLevelMaxDb) * 10.0) / 10.0;
+        const auto clipId = m_dragClip;
+        const auto sourceTime = m_dragSourceTime;
+        const auto gesture = m_dragGesture;
+        runEdit([&] {
+            return commands::setEffectParameter(m_controller.project(), clipId, model::kVolumeEffect, "level", db,
+                                                sourceTime, gesture);
+        });
+        emit statusMessage(db <= audio::kSilenceDb ? tr("Volume: -inf dB") : tr("Volume: %1 dB").arg(db, 0, 'f', 1));
+        return;
+    }
+    case Drag::FadeIn:
+    case Drag::FadeOut: {
+        const auto ref = m_controller.project().findClip(m_dragClip);
+        if (ref.clip == nullptr) {
+            return;
+        }
+        const Rational t = snapped(timeAt(pos.x()), {m_dragClip});
+        const auto& c = *ref.clip;
+        Rational fadeIn = c.fadeIn;
+        Rational fadeOut = c.fadeOut;
+        if (m_drag == Drag::FadeIn) {
+            fadeIn = max(Rational(), min(t - c.start, c.duration));
+        } else {
+            fadeOut = max(Rational(), min(c.end() - t, c.duration));
+        }
+        const auto clipId = m_dragClip;
+        const auto gesture = m_dragGesture;
+        runEdit([&] { return commands::setClipFades(clipId, fadeIn, fadeOut, gesture); });
+        const auto rate = frameRate();
+        const auto& shown = m_drag == Drag::FadeIn ? fadeIn : fadeOut;
+        emit statusMessage(tr("Fade %1: %2 frames")
+                               .arg(m_drag == Drag::FadeIn ? tr("in") : tr("out"))
+                               .arg(timeToFrames(shown, rate, Rounding::Nearest)));
+        return;
+    }
     case Drag::Slip:
     case Drag::Slide: {
         m_dragDelta = timeAt(pos.x()) - timeAt(m_dragStart.x());
@@ -813,6 +1034,12 @@ void TimelineView::updateHoverCursor(const QPoint& pos) {
         setCursor(Qt::ArrowCursor);
         return;
     }
+    switch (audioHitAt(pos).handle) {
+    case AudioHandle::Level: setCursor(Qt::SizeVerCursor); return;
+    case AudioHandle::FadeIn:
+    case AudioHandle::FadeOut: setCursor(Qt::SizeHorCursor); return;
+    case AudioHandle::None: break;
+    }
     const auto hit = hitTest(*seq, rows(), m_metrics, contentX(pos.x()), pos.y());
     setCursor(hit.zone == HitZone::InEdge || hit.zone == HitZone::OutEdge ? Qt::SizeHorCursor : Qt::ArrowCursor);
 }
@@ -860,6 +1087,46 @@ void TimelineView::rippleDeleteSelection() {
     }
     const std::vector<model::ClipId> ids(m_selection.begin(), m_selection.end());
     runEdit([&] { return commands::makeRippleDelete(m_controller.project(), m_sequence, ids); });
+}
+
+void TimelineView::copySelection() {
+    if (m_selection.empty()) {
+        return;
+    }
+    try {
+        m_clipboard = commands::copyClips(m_controller.project(), m_sequence,
+                                          std::vector<model::ClipId>(m_selection.begin(), m_selection.end()));
+        emit statusMessage(tr("%n clip(s) copied", nullptr, static_cast<int>(m_clipboard.items.size())));
+    } catch (const std::exception& e) {
+        emit statusMessage(QString::fromUtf8(e.what()));
+    }
+}
+
+void TimelineView::cutSelection() {
+    if (m_selection.empty()) {
+        return;
+    }
+    copySelection();
+    // Removes exactly what was copied (linked partners included), leaving gaps.
+    const std::vector<model::ClipId> ids(m_selection.begin(), m_selection.end());
+    runEdit([&] { return commands::makeDeleteClips(m_controller.project(), m_sequence, ids, true); });
+}
+
+void TimelineView::paste(bool insert) {
+    if (m_clipboard.empty()) {
+        emit statusMessage(tr("Nothing to paste"));
+        return;
+    }
+    const Rational at = quantizeToFrame(playhead(), frameRate(), Rounding::Floor);
+    bool done = false;
+    runEdit([&] {
+        auto command = commands::makePaste(m_controller.project(), m_sequence, m_clipboard, at, targets(), insert);
+        done = command != nullptr;
+        return command;
+    });
+    if (done && m_transport.seek) {
+        m_transport.seek(at + m_clipboard.duration); // like Premiere: playhead after the pasted clips
+    }
 }
 
 void TimelineView::toggleLinkSelection() {
@@ -1004,6 +1271,13 @@ void TimelineView::contextMenuEvent(QContextMenuEvent* event) {
             menu.addAction(tr("Ripple Delete"), this, [this] { rippleDeleteSelection(); });
             menu.addSeparator();
             menu.addAction(tr("Link / Unlink"), this, [this] { toggleLinkSelection(); });
+            menu.addSeparator();
+            menu.addAction(tr("Copy"), this, [this] { copySelection(); });
+            menu.addAction(tr("Cut"), this, [this] { cutSelection(); });
+        }
+        if (!m_clipboard.empty()) {
+            menu.addAction(tr("Paste"), this, [this] { paste(false); });
+            menu.addAction(tr("Paste Insert"), this, [this] { paste(true); });
         }
     }
     if (!menu.isEmpty()) {

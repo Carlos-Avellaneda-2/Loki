@@ -53,6 +53,8 @@ public:
     void toggleKeyframe(const std::string& effectType, const std::string& key);
     void jumpKeyframe(const std::string& effectType, const std::string& key, bool forward);
     void resetEffect(const std::string& effectType);
+    // Effect types shown for the current clip, in order (tests).
+    [[nodiscard]] std::vector<std::string> shownEffects() const;
 
 private:
     struct Row {

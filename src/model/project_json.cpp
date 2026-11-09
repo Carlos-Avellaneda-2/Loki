@@ -65,15 +65,23 @@ json clipToJson(const Clip& clip) {
     for (const auto& e : clip.effects) {
         effects.push_back(effectToJson(e));
     }
-    return {{"id", idToJson(clip.id)},
-            {"media", idToJson(clip.media)},
-            {"name", clip.name},
-            {"start", rationalToJson(clip.start)},
-            {"sourceIn", rationalToJson(clip.sourceIn)},
-            {"duration", rationalToJson(clip.duration)},
-            {"enabled", clip.enabled},
-            {"link", idToJson(clip.link)},
-            {"effects", std::move(effects)}};
+    json j = {{"id", idToJson(clip.id)},
+              {"media", idToJson(clip.media)},
+              {"name", clip.name},
+              {"start", rationalToJson(clip.start)},
+              {"sourceIn", rationalToJson(clip.sourceIn)},
+              {"duration", rationalToJson(clip.duration)},
+              {"enabled", clip.enabled},
+              {"link", idToJson(clip.link)},
+              {"effects", std::move(effects)}};
+    // Optional (D17): omitted when there is no fade.
+    if (clip.fadeIn.isPositive()) {
+        j["fadeIn"] = rationalToJson(clip.fadeIn);
+    }
+    if (clip.fadeOut.isPositive()) {
+        j["fadeOut"] = rationalToJson(clip.fadeOut);
+    }
+    return j;
 }
 
 json trackToJson(const Track& track) {
@@ -81,12 +89,23 @@ json trackToJson(const Track& track) {
     for (const auto& c : track.clips) {
         clips.push_back(clipToJson(c));
     }
-    return {{"id", idToJson(track.id)},
-            {"name", track.state.name},
-            {"locked", track.state.locked},
-            {"hidden", track.state.hidden},
-            {"muted", track.state.muted},
-            {"clips", std::move(clips)}};
+    json j = {{"id", idToJson(track.id)},
+              {"name", track.state.name},
+              {"locked", track.state.locked},
+              {"hidden", track.state.hidden},
+              {"muted", track.state.muted},
+              {"clips", std::move(clips)}};
+    // Optional mixer fields (D16): omitted at their defaults.
+    if (track.state.volumeDb != 0.0) {
+        j["volumeDb"] = track.state.volumeDb;
+    }
+    if (track.state.pan != 0.0) {
+        j["pan"] = track.state.pan;
+    }
+    if (track.state.solo) {
+        j["solo"] = true;
+    }
+    return j;
 }
 
 json mediaToJson(const MediaItem& m, const std::filesystem::path& projectDir) {
@@ -344,6 +363,12 @@ private:
         c.duration = rational(j, "duration", at);
         c.enabled = boolean(j, "enabled", at);
         c.link = id<LinkId>(j, "link", at, true);
+        if (j.contains("fadeIn")) {
+            c.fadeIn = rational(j, "fadeIn", at);
+        }
+        if (j.contains("fadeOut")) {
+            c.fadeOut = rational(j, "fadeOut", at);
+        }
         const auto& effects = array(j, "effects", at);
         for (std::size_t i = 0; i < effects.size(); ++i) {
             c.effects.push_back(readEffect(effects[i], at + "/effects/" + std::to_string(i)));
@@ -359,6 +384,15 @@ private:
         t.state.locked = boolean(j, "locked", at);
         t.state.hidden = boolean(j, "hidden", at);
         t.state.muted = boolean(j, "muted", at);
+        if (j.contains("volumeDb")) {
+            t.state.volumeDb = number(j, "volumeDb", at);
+        }
+        if (j.contains("pan")) {
+            t.state.pan = number(j, "pan", at);
+        }
+        if (j.contains("solo")) {
+            t.state.solo = boolean(j, "solo", at);
+        }
         const auto& clips = array(j, "clips", at);
         for (std::size_t i = 0; i < clips.size(); ++i) {
             t.clips.push_back(readClip(clips[i], at + "/clips/" + std::to_string(i)));
@@ -389,6 +423,9 @@ private:
         }
         if (j.contains("markOut")) {
             s.markOut = rational(j, "markOut", at);
+        }
+        if (j.contains("masterVolumeDb")) {
+            s.masterVolumeDb = number(j, "masterVolumeDb", at);
         }
         return s;
     }
@@ -449,6 +486,9 @@ json toJson(const Project& project, const std::filesystem::path& projectFile) {
         }
         if (s.markOut) {
             seqJson["markOut"] = rationalToJson(*s.markOut);
+        }
+        if (s.masterVolumeDb != 0.0) {
+            seqJson["masterVolumeDb"] = s.masterVolumeDb;
         }
         sequences.push_back(std::move(seqJson));
     }

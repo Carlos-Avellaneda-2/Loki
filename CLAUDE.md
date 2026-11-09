@@ -43,6 +43,8 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - Ediciones de timeline: construir con `commands::EditPlan` (copia de pistas → diff → un `ReplaceClipsCommand`);
   no encadenar comandos sueltos. Drags del timeline: sombra + commit al soltar.
 - Keyframes en tiempo del *source* del clip. IDs = UUID (`model::Id<Tag>` tipado).
+- Audio: la matemática de mezcla vive en `audio/mixer` (pura); preview y export la comparten. Ediciones
+  solo de mezcla no recargan el motor (`sameExceptAudioMix`): si se agrega un campo de mezcla, incluirlo ahí.
 - Atajos: nunca `QShortcut`/`keyPressEvent` sueltos; registrar con `ShortcutManager::create/bind` (id estable
   `<panel>.<acción>`, contexto de panel o "Application", tecla por defecto Premiere). Sin conflictos por contexto
   (hay test que lo verifica). Los tests Qt usan settings aislados (org "LokiTests").
@@ -90,7 +92,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 5. Línea de tiempo + Monitor de Programa — EditPlan/ReplaceClipsCommand (insert/overwrite/razor/move/trim/delete), sources de playback (archivo/secuencia), TimelineView, Program Monitor, 251 tests
 - [x] 6. Composición GPU y efectos — effect registry, CompositeFrame (render_core), GlCompositor ping-pong RGBA16F + 8 blend modes, Effect Controls con keyframes, 269 tests (+4 GPU)
 - [x] 7. Edición avanzada — ripple/roll/slip/slide, ripple delete, lift/extract con marcas In/Out de secuencia, link/unlink, ShortcutManager + diálogo de atajos, 285 tests
-- [ ] 8. Audio
+- [x] 8. Audio — audio/mixer puro, SequenceAudioSource multipista (vol/pan clip+pista, mute/solo, master, fades), medidores con reloj, Audio Meters + Audio Track Mixer, línea de volumen y fades en timeline, copiar/cortar/pegar, 313 tests
 - [ ] 9. Transiciones, color, títulos
 - [ ] 10. Exportación
 - [ ] 11. Robustez y rendimiento
@@ -98,6 +100,9 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],
   UUID, ruta abs+rel); sin solapes en pista.
 
+- D15–D18 (Fase 8): Volumen/Paneo = efectos fijos de clip de audio; volumeDb/pan/solo de pista y
+  masterVolumeDb opcionales en v1 (sin automatización de pista); fadeIn/fadeOut de clip (crossfade en
+  Fase 9); copiar/cortar/pegar (Ctrl+C/X/V, Ctrl+Shift+V insertar).
 - D11–D14 (Fases 6/7): composición = descripción pura (render_core) + GlCompositor en el monitor (mismo
   compositor para export); Movimiento/Opacidad fijos guardados al primer cambio, escalado por defecto ninguno;
   marcas In/Out de secuencia opcionales (v1); ripple delete solo desplaza pistas con el tramo libre.

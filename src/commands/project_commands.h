@@ -1,5 +1,6 @@
 #pragma once
 
+#include "commands/clip_commands.h"
 #include "commands/command.h"
 
 #include <cstddef>
@@ -235,22 +236,51 @@ private:
 
 class SetTrackStateCommand final : public Command {
 public:
-    SetTrackStateCommand(model::TrackId id, model::TrackState state, std::string text = "Track Settings")
-        : m_id(id), m_state(std::move(state)), m_text(std::move(text)) {}
+    // Commands with the same non-zero gesture on the same track merge (fader / pan drags).
+    SetTrackStateCommand(model::TrackId id, model::TrackState state, std::string text = "Track Settings",
+                         GestureId gesture = 0)
+        : m_id(id), m_state(std::move(state)), m_text(std::move(text)), m_gesture(gesture) {}
     [[nodiscard]] std::string text() const override { return m_text; }
     void redo(model::Project& project) override;
     void undo(model::Project& project) override;
+    [[nodiscard]] int mergeId() const override { return m_gesture == 0 ? -1 : kMergeTrackState; }
+    bool mergeWith(const Command& next) override;
 
 private:
     model::TrackId m_id;
     model::TrackState m_state;
     model::TrackState m_oldState;
     std::string m_text;
+    GestureId m_gesture;
+};
+
+// Master fader of a sequence (D16). Merges within a gesture.
+class SetMasterVolumeCommand final : public Command {
+public:
+    SetMasterVolumeCommand(model::SequenceId id, double db, GestureId gesture = 0)
+        : m_id(id), m_db(db), m_gesture(gesture) {}
+    [[nodiscard]] std::string text() const override { return "Master Volume"; }
+    void redo(model::Project& project) override;
+    void undo(model::Project& project) override;
+    [[nodiscard]] int mergeId() const override { return m_gesture == 0 ? -1 : kMergeMasterVolume; }
+    bool mergeWith(const Command& next) override;
+
+private:
+    model::SequenceId m_id;
+    double m_db;
+    double m_oldDb = 0.0;
+    GestureId m_gesture;
 };
 
 [[nodiscard]] std::unique_ptr<Command> setTrackLocked(const model::Project& project, model::TrackId id, bool locked);
 [[nodiscard]] std::unique_ptr<Command> setTrackHidden(const model::Project& project, model::TrackId id, bool hidden);
 [[nodiscard]] std::unique_ptr<Command> setTrackMuted(const model::Project& project, model::TrackId id, bool muted);
+// Audio mixer (D16). Volume in dB, pan in [-100, 100].
+[[nodiscard]] std::unique_ptr<Command> setTrackVolume(const model::Project& project, model::TrackId id, double db,
+                                                      GestureId gesture = 0);
+[[nodiscard]] std::unique_ptr<Command> setTrackPan(const model::Project& project, model::TrackId id, double pan,
+                                                   GestureId gesture = 0);
+[[nodiscard]] std::unique_ptr<Command> setTrackSolo(const model::Project& project, model::TrackId id, bool solo);
 [[nodiscard]] std::unique_ptr<Command> renameTrack(const model::Project& project, model::TrackId id, std::string name);
 
 } // namespace loki::commands

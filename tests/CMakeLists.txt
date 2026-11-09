@@ -32,6 +32,11 @@ loki_add_test_executable(loki_util_tests
         util/uuid_test.cpp
     LIBS loki::util GTest::gtest GTest::gtest_main)
 
+loki_add_test_executable(loki_audio_tests
+    SOURCES
+        audio/mixer_test.cpp
+    LIBS loki::audio GTest::gtest GTest::gtest_main)
+
 loki_add_test_executable(loki_model_tests
     SOURCES
         model/keyframe_test.cpp
@@ -42,6 +47,7 @@ loki_add_test_executable(loki_model_tests
 loki_add_test_executable(loki_commands_tests
     SOURCES
         commands/advanced_edit_test.cpp
+        commands/audio_commands_test.cpp
         commands/clip_commands_test.cpp
         commands/edit_commands_test.cpp
         commands/effect_commands_test.cpp
@@ -71,6 +77,7 @@ loki_add_test_executable(loki_media_tests
 
 loki_add_test_executable(loki_playback_tests
     SOURCES
+        playback/mixer_source_test.cpp
         playback/playback_test.cpp
         playback/sequence_source_test.cpp
     LIBS loki_test_support loki::playback loki::render GTest::gtest GTest::gtest_main)
@@ -78,6 +85,7 @@ loki_add_test_executable(loki_playback_tests
 loki_add_test_executable(loki_app_tests
     SOURCES
         app/main_window_test.cpp
+        ui/audio_panels_test.cpp
         app/theme_test.cpp
         ui/project_controller_test.cpp
         ui/project_panel_test.cpp

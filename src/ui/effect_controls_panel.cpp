@@ -175,6 +175,16 @@ void EffectControlsPanel::resetEffect(const std::string& effectType) {
     }
 }
 
+std::vector<std::string> EffectControlsPanel::shownEffects() const {
+    std::vector<std::string> out;
+    for (const auto& row : m_rows) {
+        if (out.empty() || out.back() != row.effectType) {
+            out.push_back(row.effectType);
+        }
+    }
+    return out;
+}
+
 void EffectControlsPanel::rebuild() {
     // Remove old rows (everything except the trailing stretch).
     while (m_bodyLayout->count() > 1) {
@@ -191,20 +201,14 @@ void EffectControlsPanel::rebuild() {
         return;
     }
     const auto ref = m_controller.project().findClip(m_clip);
-    const bool isVideo = ref.track->kind == model::TrackKind::Video;
+    const auto kind = ref.track->kind;
     const auto* media = m_controller.project().findMedia(c->media);
     m_title->setText(qs(c->name.empty() && media != nullptr ? media->name : c->name));
-    if (!isVideo) {
-        auto* note = new QLabel(tr("Audio effects arrive with the audio mixer (Phase 8)."), m_body);
-        note->setWordWrap(true);
-        m_bodyLayout->insertWidget(0, note);
-        return;
-    }
 
     int insertAt = 0;
     for (const auto& def : model::effectRegistry()) {
-        if (!def.fixed) {
-            continue;
+        if (!def.fixed || def.kind != kind) {
+            continue; // Motion/Opacity on video clips, Volume/Panner on audio clips
         }
         auto* group = new QWidget(m_body);
         auto* grid = new QGridLayout(group);

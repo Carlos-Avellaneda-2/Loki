@@ -1,6 +1,7 @@
 #include "commands/edit_commands.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <unordered_set>
 
@@ -944,6 +945,105 @@ std::unique_ptr<Command> makeUnlinkClips(const Project& project, SequenceId sequ
         }
     }
     return plan.build("Unlink");
+}
+
+// --- Copy / paste --------------------------------------------------------------------------------
+
+Clipboard copyClips(const Project& project, SequenceId sequence, const std::vector<ClipId>& clips) {
+    EditPlan plan(project, sequence);
+    std::set<ClipId> ids;
+    for (const auto id : clips) {
+        for (const auto linked : plan.withLinked(id)) {
+            ids.insert(linked);
+        }
+    }
+    Clipboard board;
+    const auto& seq = plan.sequence();
+    std::optional<Rational> first;
+    std::size_t lowest[2] = {SIZE_MAX, SIZE_MAX};
+    for (const auto kind : {TrackKind::Video, TrackKind::Audio}) {
+        const auto& tracks = seq.tracks(kind);
+        for (std::size_t i = 0; i < tracks.size(); ++i) {
+            for (const auto& c : tracks[i].clips) {
+                if (ids.contains(c.id)) {
+                    board.items.push_back({kind, i, c});
+                    first = first ? min(*first, c.start) : c.start;
+                    auto& low = lowest[kind == TrackKind::Video ? 0 : 1];
+                    low = std::min(low, i);
+                }
+            }
+        }
+    }
+    for (auto& item : board.items) {
+        item.trackIndex -= lowest[item.kind == TrackKind::Video ? 0 : 1];
+        item.clip.start -= *first;
+        board.duration = max(board.duration, item.clip.end());
+    }
+    return board;
+}
+
+std::unique_ptr<Command> makePaste(const Project& project, SequenceId sequence, const Clipboard& clipboard,
+                                   const Rational& at, const EditTargets& targets, bool insert) {
+    if (clipboard.empty()) {
+        throw CommandError("Nothing to paste");
+    }
+    if (at.isNegative()) {
+        throw CommandError("Cannot paste before the sequence start");
+    }
+    EditPlan plan(project, sequence);
+    const auto& seq = plan.sequence();
+    const auto baseIndex = [&](TrackKind kind) -> std::size_t {
+        const auto target = kind == TrackKind::Video ? targets.video : targets.audio;
+        const auto& tracks = seq.tracks(kind);
+        for (std::size_t i = 0; i < tracks.size(); ++i) {
+            if (tracks[i].id == target) {
+                return i;
+            }
+        }
+        return 0; // no target: paste from V1 / A1 up
+    };
+    const std::size_t base[2] = {baseIndex(TrackKind::Video), baseIndex(TrackKind::Audio)};
+    if (insert) {
+        for (const auto* list : {&seq.videoTracks, &seq.audioTracks}) {
+            for (const auto& t : *list) {
+                if (!t.state.locked) {
+                    plan.splitAt(t.id, at);
+                    plan.shiftFrom(t.id, at, clipboard.duration);
+                }
+            }
+        }
+    }
+    std::unordered_map<LinkId, LinkId> links;
+    for (const auto& item : clipboard.items) {
+        const auto& tracks = seq.tracks(item.kind);
+        const auto index = base[item.kind == TrackKind::Video ? 0 : 1] + item.trackIndex;
+        if (index >= tracks.size()) {
+            throw CommandError(item.kind == TrackKind::Video ? "Not enough video tracks to paste"
+                                                             : "Not enough audio tracks to paste");
+        }
+        const auto track = tracks[index].id;
+        if (plan.isLocked(track)) {
+            throw CommandError("Track is locked");
+        }
+        Clip clip = item.clip;
+        clip.id = ClipId::generate();
+        clip.start = at + item.clip.start;
+        if (!clip.link.isNull()) {
+            auto [it, inserted] = links.try_emplace(clip.link, LinkId());
+            if (inserted) {
+                it->second = LinkId::generate();
+            }
+            clip.link = it->second;
+        }
+        for (auto& effect : clip.effects) {
+            effect.id = EffectId::generate();
+        }
+        if (!insert) {
+            plan.clearRange(track, clip.start, clip.end());
+        }
+        plan.add(track, std::move(clip));
+    }
+    return plan.build(insert ? "Paste Insert" : "Paste");
 }
 
 } // namespace loki::commands

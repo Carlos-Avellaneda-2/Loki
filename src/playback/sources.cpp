@@ -202,6 +202,30 @@ void SequenceVideoSource::setMaxSize(int maxWidth, int maxHeight) {
 
 // --- SequenceAudioSource -----------------------------------------------------------------------
 
+bool sameExceptAudioMix(const SequenceSnapshot& a, const SequenceSnapshot& b) {
+    if (a.media != b.media) {
+        return false;
+    }
+    const auto normalized = [](model::Sequence seq) {
+        seq.masterVolumeDb = 0.0;
+        for (auto& track : seq.audioTracks) {
+            track.state.volumeDb = 0.0;
+            track.state.pan = 0.0;
+            track.state.muted = false;
+            track.state.solo = false;
+            for (auto& clip : track.clips) {
+                clip.fadeIn = {};
+                clip.fadeOut = {};
+                std::erase_if(clip.effects, [](const model::Effect& e) {
+                    return e.type == model::kVolumeEffect || e.type == model::kPannerEffect;
+                });
+            }
+        }
+        return seq;
+    };
+    return normalized(a.sequence) == normalized(b.sequence);
+}
+
 SequenceAudioSource::SequenceAudioSource(std::shared_ptr<const SequenceSnapshot> snapshot, int sampleRate, int channels)
     : m_snapshot(std::move(snapshot)), m_rate(sampleRate), m_channels(channels) {
     m_end = timeToFrames(m_snapshot->sequence.duration(), Rational(m_rate), Rounding::Ceil);
@@ -211,23 +235,93 @@ SequenceAudioSource::~SequenceAudioSource() = default;
 
 void SequenceAudioSource::seek(const Rational& t) {
     m_position = timeToFrames(max(Rational(), t), Rational(m_rate), Rounding::Nearest);
+    m_rampsValid = false;
+}
+
+void SequenceAudioSource::updateMix(std::shared_ptr<const SequenceSnapshot> snapshot) {
+    m_snapshot = std::move(snapshot);
+}
+
+namespace {
+
+// Gains are re-evaluated every this many frames inside a clip (keyframes, fades) and ramped
+// linearly in between.
+constexpr std::int64_t kGainStep = 64;
+
+} // namespace
+
+void SequenceAudioSource::mixClip(const model::Clip& clip, const model::MediaItem& media, std::int64_t segStart,
+                                  std::int64_t segEnd, std::int64_t blockStart, float* bus) {
+    auto& reader = m_readers[clip.id];
+    if (!reader.decoder) {
+        try {
+            reader.decoder = std::make_unique<media::AudioDecoder>(media.path, m_rate, m_channels);
+        } catch (const std::exception& e) {
+            spdlog::warn("Audio offline for playback ({}): {}", model::pathToUtf8(media.path), e.what());
+            m_offline.insert(clip.media);
+            m_readers.erase(clip.id);
+            return;
+        }
+    }
+    if (reader.nextFrame != segStart) {
+        reader.decoder->seek(clip.toSourceTime(Rational(segStart, m_rate)));
+    }
+    const auto ch = static_cast<std::size_t>(m_channels);
+    const auto count = static_cast<std::size_t>(segEnd - segStart);
+    m_scratch.assign(count * ch, 0.0f);
+    const auto got = static_cast<std::int64_t>(reader.decoder->read(m_scratch.data(), count));
+    reader.nextFrame = segEnd;
+
+    const bool mono = media.info.audioChannels == 1;
+    const double duration = clip.duration.toDouble();
+    const double fadeIn = clip.fadeIn.toDouble();
+    const double fadeOut = clip.fadeOut.toDouble();
+    const auto gainAt = [&](std::int64_t frame) {
+        const Rational t(frame, m_rate);
+        const auto mix = model::resolveAudioMix(clip, clip.toSourceTime(t));
+        const auto fade = audio::clipFadeGain((t - clip.start).toDouble(), duration, fadeIn, fadeOut);
+        const auto pan = mono ? audio::monoPanGains(mix.pan) : audio::balanceGains(mix.pan);
+        return pan * static_cast<float>(audio::dbToGain(mix.levelDb) * fade);
+    };
+    audio::StereoGains from = gainAt(segStart);
+    for (std::int64_t f = segStart; f < segStart + got; f += kGainStep) {
+        const auto stepEnd = std::min(segStart + got, f + kGainStep);
+        const auto to = gainAt(stepEnd);
+        const auto offset = static_cast<std::size_t>(f - segStart) * ch;
+        audio::mixRamp(bus + static_cast<std::size_t>(f - blockStart) * ch, m_scratch.data() + offset,
+                       static_cast<std::size_t>(stepEnd - f), m_channels, from, to);
+        from = to;
+    }
 }
 
 std::size_t SequenceAudioSource::read(float* out, std::size_t frames) {
+    m_levels.clear();
     if (m_position >= m_end) {
         return 0;
     }
     const auto n = static_cast<std::int64_t>(std::min<std::int64_t>(static_cast<std::int64_t>(frames), m_end - m_position));
+    const auto nFrames = static_cast<std::size_t>(n);
     const auto ch = static_cast<std::size_t>(m_channels);
-    std::fill_n(out, static_cast<std::size_t>(n) * ch, 0.0f);
+    std::fill_n(out, nFrames * ch, 0.0f);
     const std::int64_t blockStart = m_position;
     const std::int64_t blockEnd = m_position + n;
     const Rational rate(m_rate);
+    const auto& seq = m_snapshot->sequence;
+    const bool anySolo = std::any_of(seq.audioTracks.begin(), seq.audioTracks.end(),
+                                     [](const model::Track& t) { return t.state.solo; });
 
-    for (const auto& track : m_snapshot->sequence.audioTracks) {
-        if (track.state.muted) {
-            continue;
+    for (const auto& track : seq.audioTracks) {
+        const bool audible = !track.state.muted && (!anySolo || track.state.solo);
+        const auto target = audible ? audio::balanceGains(track.state.pan) * audio::dbToGain(track.state.volumeDb)
+                                    : audio::StereoGains{0.0f, 0.0f};
+        auto [prev, inserted] = m_trackGains.try_emplace(track.id, target);
+        const auto from = (inserted || !m_rampsValid) ? target : prev->second;
+        prev->second = target;
+        if (!audible && from == target) {
+            m_levels.push_back({track.id, {}});
+            continue; // silent for the whole block: skip decoding (readers re-seek when heard again)
         }
+        m_bus.assign(nFrames * ch, 0.0f);
         for (const auto& clip : track.clips) {
             if (!clip.enabled) {
                 continue;
@@ -243,37 +337,23 @@ std::size_t SequenceAudioSource::read(float* out, std::size_t frames) {
             if (media == m_snapshot->media.end() || !media->second.info.hasAudio || m_offline.contains(clip.media)) {
                 continue;
             }
-            auto& reader = m_readers[clip.id];
-            if (!reader.decoder) {
-                try {
-                    reader.decoder = std::make_unique<media::AudioDecoder>(media->second.path, m_rate, m_channels);
-                } catch (const std::exception& e) {
-                    spdlog::warn("Audio offline for playback ({}): {}", model::pathToUtf8(media->second.path), e.what());
-                    m_offline.insert(clip.media);
-                    m_readers.erase(clip.id);
-                    continue;
-                }
-            }
-            if (reader.nextFrame != segStart) {
-                reader.decoder->seek(clip.toSourceTime(Rational(segStart, m_rate)));
-            }
-            const auto count = static_cast<std::size_t>(segEnd - segStart);
-            m_scratch.assign(count * ch, 0.0f);
-            const auto got = reader.decoder->read(m_scratch.data(), count);
-            float* dst = out + static_cast<std::size_t>(segStart - blockStart) * ch;
-            for (std::size_t i = 0; i < got * ch; ++i) {
-                dst[i] += m_scratch[i];
-            }
-            reader.nextFrame = segEnd;
+            mixClip(clip, media->second, segStart, segEnd, blockStart, m_bus.data());
+        }
+        audio::applyRamp(m_bus.data(), nFrames, m_channels, from, target);
+        m_levels.push_back({track.id, audio::measure(m_bus.data(), nFrames, m_channels)});
+        for (std::size_t i = 0; i < nFrames * ch; ++i) {
+            out[i] += m_bus[i];
         }
     }
-    for (std::size_t i = 0; i < static_cast<std::size_t>(n) * ch; ++i) {
-        out[i] = std::clamp(out[i], -1.0f, 1.0f);
-    }
+    const auto master = audio::StereoGains{1.0f, 1.0f} * audio::dbToGain(seq.masterVolumeDb);
+    audio::applyRamp(out, nFrames, m_channels, m_rampsValid ? m_masterGain : master, master);
+    m_masterGain = master;
+    m_rampsValid = true;
+    audio::clampSamples(out, nFrames * ch);
     // Drop readers of clips that are behind the play position.
     std::erase_if(m_readers, [&](const auto& entry) { return entry.second.nextFrame >= 0 && entry.second.nextFrame < blockStart; });
     m_position = blockEnd;
-    return static_cast<std::size_t>(n);
+    return nFrames;
 }
 
 } // namespace loki::playback

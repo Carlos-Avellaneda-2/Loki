@@ -80,6 +80,10 @@ struct Clip {
     Rational duration; // > 0
     bool enabled = true;
     LinkId link; // clips sharing a non-null link move together (A/V link, Phase 7)
+    // Audio fade handles (D17): lengths from the clip's start / end; 0 = none. Clamped to the
+    // clip duration when mixing, so trims never make them invalid.
+    Rational fadeIn;
+    Rational fadeOut;
     std::vector<Effect> effects;
 
     [[nodiscard]] Rational end() const { return start + duration; }
@@ -105,6 +109,10 @@ struct TrackState {
     bool locked = false;
     bool hidden = false; // video: output disabled (eye)
     bool muted = false;  // audio: muted
+    // Audio mixer (D16): fader in dB, pan -100 (L) .. 100 (R), solo.
+    double volumeDb = 0.0;
+    double pan = 0.0;
+    bool solo = false;
 
     friend bool operator==(const TrackState&, const TrackState&) = default;
 };
@@ -138,6 +146,7 @@ struct Sequence {
     // Sequence In/Out marks (lift/extract, D13); Out is exclusive.
     std::optional<Rational> markIn;
     std::optional<Rational> markOut;
+    double masterVolumeDb = 0.0; // master fader (D16)
 
     [[nodiscard]] const std::vector<Track>& tracks(TrackKind kind) const noexcept {
         return kind == TrackKind::Video ? videoTracks : audioTracks;

@@ -313,6 +313,42 @@ sequenceDiagram
   - `conflicts()` detecta teclas repetidas en un mismo contexto o contra un atajo global.
   - Edición > Atajos de teclado (`app::ShortcutsDialog`) no deja aplicar si hay conflictos.
 
+## 7f. Audio (Fase 8, D15–D18)
+
+- `audio/mixer` son funciones puras, compartidas por la vista previa y el export:
+  - conversión dB ↔ ganancia;
+  - balance (estéreo y buses: centro sin cambio);
+  - paneo de potencia constante para material mono (−3 dB al centro);
+  - curva de fundido de igual potencia;
+  - rampas de ganancia por bloque;
+  - medición de pico y RMS.
+- Cadena de `SequenceAudioSource`:
+  - Por clip: Volumen (dB, con keyframes) × fundidos × Paneo. La ganancia se evalúa cada 64 muestras y se interpola entre esos puntos.
+  - Luego, el bus de cada pista: fader, balance, mute y solo (con cualquier pista en solo, solo suenan las que lo tienen; el mute gana sobre el solo).
+  - Al final, el master y el límite a [−1, 1].
+  - Los cambios de ganancia hacen rampa a lo largo del bloque, así que no hay clics.
+- Volumen (`loki.volume`) y Paneo (`loki.panner`) son efectos fijos de los clips de audio (D15). `EffectDef::kind` decide en qué clips aparecen.
+- Los fundidos (D17) son campos `fadeIn` y `fadeOut` del clip:
+  - Al mezclar se recortan a la duración del clip, así que un recorte nunca los deja inválidos.
+  - Si se solapan, se reparten el clip en proporción.
+- Ediciones que solo cambian la mezcla:
+  - `sameExceptAudioMix()` detecta los snapshots que difieren solo en eso. Entonces el motor cambia el snapshot del source de audio sin recrear decodificadores ni vaciar buffers.
+  - Latencia: hasta 500 ms (lo que ya está en el ring de audio).
+- Medidores:
+  - El hilo de medios mide cada bloque escrito en el ring: el master y el nivel post-fader de cada pista. Cada medida lleva su frame de línea de tiempo.
+  - `PlaybackEngine::levels()` combina los bloques que suenan ahora (ventana de 50 ms según el reloj de audio) y no tiene estado.
+  - `LevelMeter` aplica la balística: caída de 24 dB/s, retención de pico de 1,5 s y luz de clip.
+- Paneles:
+  - Audio Meters muestra el master de lo que esté sonando (Programa u Origen).
+  - Audio Track Mixer tiene un strip por pista (paneo, M/S, fader de +6 a −inf y medidor) más el master. Un arrastre de fader = un undo (gesto).
+- En el timeline:
+  - Una línea de volumen sobre los clips de audio: se arrastra para cambiar el nivel; Ctrl+clic agrega un keyframe.
+  - Tiradores de fundido en las esquinas del clip.
+  - Botón S (solo) en la cabecera de las pistas de audio.
+- Portapapeles (D18): `copyClips` y `makePaste` (sobrescribir o insertar).
+  - Pega en las pistas de destino y conserva la disposición relativa de las pistas.
+  - Los clips pegados reciben ids nuevos y grupos de vínculo nuevos.
+
 ## 8. Export
 
 - Mismo grafo que playback, reloj "offline" (frame a frame), sumidero = encoder.

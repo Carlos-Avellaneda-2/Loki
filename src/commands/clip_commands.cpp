@@ -269,6 +269,19 @@ std::unique_ptr<Command> setEffectEnabled(ClipId id, EffectId effectId, bool ena
                                              [=](Clip& c) { requireEffect(c, effectId).enabled = enabled; });
 }
 
+std::unique_ptr<Command> setClipFades(ClipId id, Rational fadeIn, Rational fadeOut, GestureId gesture) {
+    if (fadeIn.isNegative() || fadeOut.isNegative()) {
+        throw CommandError("Fades cannot be negative");
+    }
+    return std::make_unique<EditClipCommand>(
+        id, "Audio Fade",
+        [=](Clip& c) {
+            c.fadeIn = min(fadeIn, c.duration);
+            c.fadeOut = min(fadeOut, c.duration);
+        },
+        gestureKey(gesture, "fades"));
+}
+
 std::unique_ptr<Command> setParameterValue(ClipId id, EffectId effectId, std::string key, double value,
                                            GestureId gesture) {
     std::string mergeKey = gestureKey(gesture, "param:" + effectId.toString() + ":" + key);

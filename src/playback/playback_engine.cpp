@@ -15,6 +15,7 @@ namespace {
 
 constexpr int kAudioRingMs = 500;
 constexpr int kAudioRefillFrames = 1024;
+constexpr int kMeterWindowMs = 50;
 // Video further behind the clock than this is skipped by re-seeking instead of decoding through.
 const Rational kResyncThreshold(1, 2);
 
@@ -403,6 +404,15 @@ void PlaybackEngine::doOpenFile(const FileRequest& request) {
 
 void PlaybackEngine::doOpenSequence(std::shared_ptr<const SequenceSnapshot> snapshot) {
     const bool update = m_snapshot && snapshot && m_snapshot->sequence.id == snapshot->sequence.id;
+    if (update && sameExceptAudioMix(*m_snapshot, *snapshot)) {
+        // Mixer move (fader, pan, mute, clip volume, fade): keep decoders, buffers and pictures.
+        // The ring still holds up to kAudioRingMs of audio mixed with the old settings.
+        if (auto* audio = dynamic_cast<SequenceAudioSource*>(m_audio.get())) {
+            audio->updateMix(snapshot);
+        }
+        m_snapshot = std::move(snapshot);
+        return;
+    }
     const Rational position = update ? m_clock.now() : Rational();
     const int rate = update ? m_activeRate : 0;
     if (!update) {
@@ -457,6 +467,7 @@ void PlaybackEngine::applyTransport(int rate, const Rational& position) {
     const bool audioDriven = rate == 1 && m_audio && m_device;
     if (audioDriven) {
         m_audio->seek(position);
+        m_audioWriteFrame = timeToFrames(position, Rational(m_device->sampleRate()), Rounding::Nearest);
         feedAudio(); // prime before the clock starts
         m_clock.start(position, rate, true, m_device->sampleRate(), static_cast<std::int64_t>(m_device->latencyFrames()));
         activateAudio(true);
@@ -610,6 +621,17 @@ void PlaybackEngine::feedAudio() {
             break; // end of audio: the callback plays silence while the clock keeps running
         }
         m_ring->write(m_audioScratch.data(), frames * channels);
+        MeterBlock block{m_audioWriteFrame, static_cast<std::int64_t>(frames),
+                         audio::measure(m_audioScratch.data(), frames, static_cast<int>(channels)),
+                         m_audio->trackLevels()};
+        m_audioWriteFrame += static_cast<std::int64_t>(frames);
+        std::lock_guard lock(m_meterMutex);
+        m_meterBlocks.push_back(std::move(block));
+        // Keep about two ring lengths of history.
+        const auto keep = static_cast<std::int64_t>(m_device->sampleRate()) * kAudioRingMs * 2 / 1000;
+        while (!m_meterBlocks.empty() && m_meterBlocks.front().start + keep < m_audioWriteFrame) {
+            m_meterBlocks.pop_front();
+        }
     }
 }
 
@@ -634,6 +656,43 @@ void PlaybackEngine::activateAudio(bool on) {
         }
     }
     m_ring->clearFromConsumer();
+    std::lock_guard lock(m_meterMutex);
+    m_meterBlocks.clear();
+}
+
+MixLevels PlaybackEngine::levels() const {
+    MixLevels out;
+    if (!m_device || !m_audioActive.load(std::memory_order_acquire)) {
+        return out;
+    }
+    const auto now = timeToFrames(max(Rational(), m_clock.now()), Rational(m_device->sampleRate()), Rounding::Floor);
+    const auto window = static_cast<std::int64_t>(m_device->sampleRate()) * kMeterWindowMs / 1000;
+    std::lock_guard lock(m_meterMutex);
+    std::size_t combined = 0;
+    for (const auto& block : m_meterBlocks) {
+        const auto blockEnd = block.start + block.frames;
+        // Blocks heard during the last kMeterWindowMs (covers a ~30 Hz UI poll without gaps).
+        const bool heard = block.start <= now && blockEnd > now - window;
+        if (!heard) {
+            continue;
+        }
+        const auto frames = static_cast<std::size_t>(block.frames);
+        if (combined == 0) {
+            out.master = block.master;
+            out.tracks = block.tracks;
+        } else {
+            out.master = audio::StereoLevel::combine(out.master, combined, block.master, frames);
+            for (std::size_t i = 0; i < out.tracks.size() && i < block.tracks.size(); ++i) {
+                if (out.tracks[i].track == block.tracks[i].track) {
+                    out.tracks[i].level =
+                        audio::StereoLevel::combine(out.tracks[i].level, combined, block.tracks[i].level, frames);
+                }
+            }
+        }
+        combined += frames;
+    }
+    out.active = true;
+    return out;
 }
 
 void PlaybackEngine::checkEnd() {

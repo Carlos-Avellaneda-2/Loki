@@ -13,6 +13,11 @@ namespace loki::model {
 // Effect Controls panel; they are only stored in the project once a value is changed.
 inline constexpr std::string_view kMotionEffect = "loki.motion";
 inline constexpr std::string_view kOpacityEffect = "loki.opacity";
+// Audio fixed effects (D15): clip level in dB and pan/balance (-100 L .. 100 R).
+inline constexpr std::string_view kVolumeEffect = "loki.volume";
+inline constexpr std::string_view kPannerEffect = "loki.panner";
+// Levels at or below this many dB are silence (-inf).
+inline constexpr double kSilenceDb = -96.0;
 
 enum class BlendMode { Normal = 0, Multiply, Screen, Overlay, Add, Darken, Lighten, Difference };
 inline constexpr int kBlendModeCount = 8;
@@ -44,7 +49,8 @@ struct ParameterDef {
 struct EffectDef {
     std::string type;
     std::string label;
-    bool fixed = false; // shown on every clip (Motion, Opacity)
+    bool fixed = false; // shown on every clip of `kind` (Motion/Opacity on video, Volume/Panner on audio)
+    TrackKind kind = TrackKind::Video;
     std::vector<ParameterDef> parameters;
 
     [[nodiscard]] const ParameterDef* parameter(std::string_view key) const noexcept;
@@ -67,6 +73,13 @@ struct EffectDef {
 
 // A new effect of `type` with every parameter set to its default (dynamic defaults resolved).
 [[nodiscard]] Effect makeEffect(std::string_view type, const MediaInfo& media, const SequenceSettings& settings);
+
+// Resolved Volume + Panner of an audio clip at a source time.
+struct ClipAudioMix {
+    double levelDb = 0.0;
+    double pan = 0.0; // -100 .. 100
+};
+[[nodiscard]] ClipAudioMix resolveAudioMix(const Clip& clip, const Rational& sourceTime);
 
 // Resolved Motion + Opacity of a clip at a source time (pixels, percent, degrees as stored).
 struct ClipTransform {

@@ -9,6 +9,8 @@
 #include "ui/project_controller.h"
 #include "ui/project_panel.h"
 #include "commands/edit_commands.h"
+#include "ui/audio_meters.h"
+#include "ui/audio_mixer_panel.h"
 #include "ui/effect_controls_panel.h"
 #include "ui/program_monitor_panel.h"
 #include "ui/source_monitor_panel.h"
@@ -89,6 +91,10 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
         dockWidget(ui::PanelId::SourceMonitor)->raise();
     });
     m_timeline->setTransport(m_programMonitor->transport());
+    // Meters: whatever is playing (Program first, then Source); the mixer follows the sequence.
+    m_audioMeters->addSource([this] { return m_programMonitor->engine().levels(); });
+    m_audioMeters->addSource([this] { return m_sourceMonitor->engine().levels(); });
+    m_audioMixer->setLevelSource([this] { return m_programMonitor->engine().levels(); });
     m_timeline->registerShortcuts(*m_shortcuts);
     m_sourceMonitor->registerShortcuts(*m_shortcuts);
     m_programMonitor->registerShortcuts(*m_shortcuts);
@@ -139,6 +145,7 @@ void MainWindow::activateFirstSequence() {
     m_activeSequence = sequences.empty() ? model::SequenceId() : sequences.front().id;
     m_timeline->setSequence(m_activeSequence);
     m_programMonitor->setSequence(m_activeSequence);
+    m_audioMixer->setSequence(m_activeSequence);
 }
 
 void MainWindow::sourceEdit(model::MediaId media, bool insert) {
@@ -190,10 +197,11 @@ void MainWindow::createDockWidgets() {
 
     using ui::PanelId;
     // Default "Editing" workspace, Premiere-like:
-    //   [ Source | Effect Controls (tabs) ] [ Program            ]
+    //   [ Source | Effect Controls | Audio Track Mixer (tabs) ] [ Program ]
     //   [ Project ] [ Timeline                    ] [ Audio Meters ]
     auto* sourceArea = m_dockManager->addDockWidget(ads::TopDockWidgetArea, dockWidget(PanelId::SourceMonitor));
     m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::EffectControls), sourceArea);
+    m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::AudioMixer), sourceArea);
     m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::ProgramMonitor), sourceArea);
 
     auto* timelineArea = m_dockManager->addDockWidget(ads::BottomDockWidgetArea, dockWidget(PanelId::Timeline));
@@ -226,6 +234,14 @@ QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
     case ui::PanelId::SourceMonitor: {
         m_sourceMonitor = new ui::SourceMonitorPanel(*m_controller, *m_services, m_playbackOptions);
         return m_sourceMonitor;
+    }
+    case ui::PanelId::AudioMeters: {
+        m_audioMeters = new ui::AudioMetersPanel();
+        return m_audioMeters;
+    }
+    case ui::PanelId::AudioMixer: {
+        m_audioMixer = new ui::AudioMixerPanel(*m_controller);
+        return m_audioMixer;
     }
     default: return ui::createPanel(id);
     }

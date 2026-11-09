@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/mixer.h"
 #include "media/video_frame.h"
 #include "model/types.h"
 #include "render/composite.h"
@@ -53,6 +54,12 @@ protected:
     VideoSource() = default;
 };
 
+// Post-fader level of one audio track during the last read() block.
+struct TrackLevel {
+    model::TrackId track;
+    audio::StereoLevel level;
+};
+
 // Audio provider: interleaved float frames at the device rate/channels.
 class AudioSource {
 public:
@@ -65,6 +72,8 @@ public:
     virtual void seek(const Rational& t) = 0;
     // Returns frames written; 0 at the end.
     virtual std::size_t read(float* out, std::size_t frames) = 0;
+    // Per-track levels of the last read() (empty for single files).
+    [[nodiscard]] virtual std::vector<TrackLevel> trackLevels() const { return {}; }
 
 protected:
     AudioSource() = default;
@@ -136,20 +145,31 @@ private:
     std::unordered_set<model::MediaId> m_offline;
 };
 
-// Phase 5: sums every enabled clip on unmuted audio tracks (unity gain, clamped). The Phase 8
-// mixer adds gain, pan and meters.
+// True when `a` and `b` differ at most in audio mix settings (track volume/pan/mute/solo, master,
+// clip Volume/Panner effects, fades): playback can then keep its decoders and buffers.
+[[nodiscard]] bool sameExceptAudioMix(const SequenceSnapshot& a, const SequenceSnapshot& b);
+
+// Multitrack mixer (Phase 8). Per clip: Volume level (keyframes) x fade handles x Panner (mono
+// material: constant-power pan, stereo: balance). Per track: fader + balance, mute/solo. Then the
+// master fader and a hard limit. Gains ramp across each block, so changes never click.
 class SequenceAudioSource final : public AudioSource {
 public:
     SequenceAudioSource(std::shared_ptr<const SequenceSnapshot> snapshot, int sampleRate, int channels);
     ~SequenceAudioSource() override;
     void seek(const Rational& t) override;
     std::size_t read(float* out, std::size_t frames) override;
+    [[nodiscard]] std::vector<TrackLevel> trackLevels() const override { return m_levels; }
+    // Swaps in a snapshot that passed sameExceptAudioMix(): new gains apply from the next block.
+    void updateMix(std::shared_ptr<const SequenceSnapshot> snapshot);
 
 private:
     struct ClipReader {
         std::unique_ptr<media::AudioDecoder> decoder;
         std::int64_t nextFrame = -1; // sequence frame the decoder is positioned at
     };
+
+    void mixClip(const model::Clip& clip, const model::MediaItem& media, std::int64_t segStart, std::int64_t segEnd,
+                 std::int64_t blockStart, float* bus);
 
     std::shared_ptr<const SequenceSnapshot> m_snapshot;
     int m_rate;
@@ -159,6 +179,11 @@ private:
     std::unordered_map<model::ClipId, ClipReader> m_readers;
     std::unordered_set<model::MediaId> m_offline;
     std::vector<float> m_scratch;
+    std::vector<float> m_bus;
+    std::unordered_map<model::TrackId, audio::StereoGains> m_trackGains; // last applied (ramps)
+    audio::StereoGains m_masterGain{0.0f, 0.0f};
+    bool m_rampsValid = false; // false after a seek: start at the target gain
+    std::vector<TrackLevel> m_levels;
 };
 
 } // namespace loki::playback

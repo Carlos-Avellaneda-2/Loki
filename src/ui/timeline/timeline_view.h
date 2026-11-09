@@ -73,6 +73,11 @@ public:
     void rippleDeleteSelection();
     void razorAtPlayhead(bool allTracks);
     void toggleLinkSelection();
+    // Clipboard (D18): copy / cut the selection, paste at the playhead on the target tracks.
+    void copySelection();
+    void cutSelection();
+    void paste(bool insert);
+    [[nodiscard]] const commands::Clipboard& clipboard() const noexcept { return m_clipboard; }
     void markIn();
     void markOut();
     void clearMarks();
@@ -108,7 +113,17 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 private:
-    enum class Drag { None, Scrub, Move, TrimIn, TrimOut, Slip, Slide };
+    enum class Drag { None, Scrub, Move, TrimIn, TrimOut, Slip, Slide, Volume, FadeIn, FadeOut };
+
+    // Audio clip overlays (Selection tool): volume line and fade handles.
+    enum class AudioHandle { None, Level, FadeIn, FadeOut };
+    struct AudioHit {
+        AudioHandle handle = AudioHandle::None;
+        model::ClipId clip;
+    };
+    [[nodiscard]] AudioHit audioHitAt(const QPoint& pos) const;
+    [[nodiscard]] QRectF clipRect(const TrackRow& row, const model::Clip& clip) const;
+    void paintAudioOverlay(QPainter& p, const QRectF& r, const model::Clip& clip) const;
 
     struct DropPreview {
         model::MediaId media;
@@ -160,8 +175,11 @@ private:
     Rational m_dragDelta;
     int m_dragTrackDelta = 0;
     bool m_dragLinked = true;
+    commands::GestureId m_dragGesture = 0;
+    Rational m_dragSourceTime; // volume drag: source time where the line was grabbed
     std::optional<Rational> m_snapIndicator;
     std::optional<DropPreview> m_dropPreview;
+    commands::Clipboard m_clipboard;
 };
 
 } // namespace loki::ui::timeline

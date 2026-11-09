@@ -337,17 +337,49 @@ void SetTrackStateCommand::undo(Project& project) {
     mutate(project).setTrackState(m_id, m_oldState);
 }
 
+bool SetTrackStateCommand::mergeWith(const Command& next) {
+    const auto* other = dynamic_cast<const SetTrackStateCommand*>(&next);
+    if (other == nullptr || other->m_id != m_id || other->m_gesture != m_gesture || m_gesture == 0) {
+        return false;
+    }
+    m_state = other->m_state;
+    return true;
+}
+
+void SetMasterVolumeCommand::redo(Project& project) {
+    const auto* seq = project.findSequence(m_id);
+    if (seq == nullptr) {
+        throw CommandError("Sequence does not exist");
+    }
+    m_oldDb = seq->masterVolumeDb;
+    mutate(project).setSequenceMasterVolume(m_id, m_db);
+}
+
+void SetMasterVolumeCommand::undo(Project& project) {
+    mutate(project).setSequenceMasterVolume(m_id, m_oldDb);
+}
+
+bool SetMasterVolumeCommand::mergeWith(const Command& next) {
+    const auto* other = dynamic_cast<const SetMasterVolumeCommand*>(&next);
+    if (other == nullptr || other->m_id != m_id || other->m_gesture != m_gesture || m_gesture == 0) {
+        return false;
+    }
+    m_db = other->m_db;
+    return true;
+}
+
 namespace {
 
 template <typename Fn>
-std::unique_ptr<Command> editTrackState(const Project& project, TrackId id, std::string text, Fn fn) {
+std::unique_ptr<Command> editTrackState(const Project& project, TrackId id, std::string text, Fn fn,
+                                        GestureId gesture = 0) {
     const auto ref = project.findTrack(id);
     if (ref.track == nullptr) {
         throw CommandError("Track does not exist");
     }
     TrackState state = ref.track->state;
     fn(state);
-    return std::make_unique<SetTrackStateCommand>(id, std::move(state), std::move(text));
+    return std::make_unique<SetTrackStateCommand>(id, std::move(state), std::move(text), gesture);
 }
 
 } // namespace
@@ -365,6 +397,21 @@ std::unique_ptr<Command> setTrackHidden(const Project& project, TrackId id, bool
 std::unique_ptr<Command> setTrackMuted(const Project& project, TrackId id, bool muted) {
     return editTrackState(project, id, muted ? "Mute Track" : "Unmute Track",
                           [muted](TrackState& s) { s.muted = muted; });
+}
+
+std::unique_ptr<Command> setTrackVolume(const Project& project, TrackId id, double db, GestureId gesture) {
+    return editTrackState(project, id, "Track Volume", [db](TrackState& s) { s.volumeDb = db; }, gesture);
+}
+
+std::unique_ptr<Command> setTrackPan(const Project& project, TrackId id, double pan, GestureId gesture) {
+    if (!(pan >= -100.0 && pan <= 100.0)) {
+        throw CommandError("Pan must be within [-100, 100]");
+    }
+    return editTrackState(project, id, "Track Pan", [pan](TrackState& s) { s.pan = pan; }, gesture);
+}
+
+std::unique_ptr<Command> setTrackSolo(const Project& project, TrackId id, bool solo) {
+    return editTrackState(project, id, solo ? "Solo Track" : "Unsolo Track", [solo](TrackState& s) { s.solo = solo; });
 }
 
 std::unique_ptr<Command> renameTrack(const Project& project, TrackId id, std::string name) {

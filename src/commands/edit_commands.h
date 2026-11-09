@@ -195,4 +195,34 @@ enum class ClipEdge { In, Out };
 [[nodiscard]] std::unique_ptr<Command> makeUnlinkClips(const model::Project& project, model::SequenceId sequence,
                                                        const std::vector<model::ClipId>& clips);
 
+// --- Copy / paste (D18) ------------------------------------------------------------------------
+
+// Clips copied from a sequence. Starts are relative to the earliest copied clip (0); trackIndex
+// is relative to the lowest copied track of the same kind (0).
+struct ClipboardItem {
+    model::TrackKind kind = model::TrackKind::Video;
+    std::size_t trackIndex = 0;
+    model::Clip clip;
+
+    friend bool operator==(const ClipboardItem&, const ClipboardItem&) = default;
+};
+struct Clipboard {
+    std::vector<ClipboardItem> items;
+    Rational duration; // end of the last copied clip
+
+    [[nodiscard]] bool empty() const noexcept { return items.empty(); }
+};
+
+// Copies the clips (and their linked partners) of a sequence.
+[[nodiscard]] Clipboard copyClips(const model::Project& project, model::SequenceId sequence,
+                                  const std::vector<model::ClipId>& clips);
+
+// Pastes at `at`. Copied clips go to the target tracks (the lowest copied video track to
+// `targets.video`, audio likewise; a null target keeps the copied track numbers). New ids; linked
+// groups stay linked to each other. Overwrite (Ctrl+V) or insert (Ctrl+Shift+V: every unlocked
+// track makes room first).
+[[nodiscard]] std::unique_ptr<Command> makePaste(const model::Project& project, model::SequenceId sequence,
+                                                 const Clipboard& clipboard, const Rational& at,
+                                                 const EditTargets& targets, bool insert);
+
 } // namespace loki::commands

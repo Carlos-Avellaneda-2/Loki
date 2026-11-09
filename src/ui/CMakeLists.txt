@@ -1,4 +1,9 @@
 add_library(loki_ui STATIC
+    audio_meters.h
+    audio_meters.cpp
+    audio_mixer_panel.h
+    audio_mixer_panel.cpp
+    audio_scale.h
     effect_controls_panel.h
     effect_controls_panel.cpp
     media_services.h

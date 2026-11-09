@@ -36,6 +36,9 @@ std::string clipShapeProblem(const Clip& clip) {
     if (clip.sourceIn.isNegative()) {
         return "clip " + clip.id.toString() + " has negative source in";
     }
+    if (clip.fadeIn.isNegative() || clip.fadeOut.isNegative()) {
+        return "clip " + clip.id.toString() + " has a negative fade";
+    }
     if (clip.start.isNegative()) {
         return "clip " + clip.id.toString() + " starts before zero";
     }
@@ -60,6 +63,9 @@ std::string clipShapeProblem(const Clip& clip) {
 std::string trackProblem(const Track& track) {
     if (track.id.isNull()) {
         return "track has a null id";
+    }
+    if (!std::isfinite(track.state.volumeDb) || !(track.state.pan >= -100.0 && track.state.pan <= 100.0)) {
+        return "track " + track.id.toString() + " has an invalid volume or pan";
     }
     for (std::size_t i = 0; i < track.clips.size(); ++i) {
         if (auto problem = clipShapeProblem(track.clips[i]); !problem.empty()) {
@@ -462,6 +468,14 @@ void ProjectMutator::setSequenceMarks(SequenceId id, std::optional<Rational> in,
     m_project.notify({ChangeKind::SequenceChanged, id.uuid(), {}});
 }
 
+void ProjectMutator::setSequenceMasterVolume(SequenceId id, double db) {
+    if (!std::isfinite(db)) {
+        fail("master volume must be finite");
+    }
+    sequence(id).masterVolumeDb = db;
+    m_project.notify({ChangeKind::SequenceChanged, id.uuid(), {}});
+}
+
 void ProjectMutator::setSequenceSettings(SequenceId id, SequenceSettings settings) {
     auto& seq = sequence(id);
     if (auto p = settingsProblem(settings); !p.empty()) {
@@ -531,6 +545,9 @@ Track ProjectMutator::removeTrack(TrackId id, std::size_t* indexOut) {
 }
 
 void ProjectMutator::setTrackState(TrackId id, TrackState state) {
+    if (!std::isfinite(state.volumeDb) || !std::isfinite(state.pan) || state.pan < -100.0 || state.pan > 100.0) {
+        fail("track volume must be finite and pan within [-100, 100]");
+    }
     std::size_t index = 0;
     auto [seq, list] = trackList(id, index);
     (*list)[index].state = std::move(state);

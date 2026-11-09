@@ -13,6 +13,9 @@ namespace loki::commands {
 enum MergeId : int {
     kMergeMoveClip = 1,
     kMergeEditClip = 2,
+    // 3 = ReplaceClipsCommand
+    kMergeTrackState = 4,
+    kMergeMasterVolume = 5,
 };
 
 // Identifies one continuous user gesture (a drag, a slider scrub). Commands created with the same
@@ -114,6 +117,9 @@ private:
 // Sets the clip's timeline range and source in-point (trim). Merges within a gesture.
 [[nodiscard]] std::unique_ptr<Command> trimClip(model::ClipId id, Rational start, Rational sourceIn, Rational duration,
                                                 GestureId gesture = 0);
+// Audio fade handles (D17). Merges within a gesture (handle drag).
+[[nodiscard]] std::unique_ptr<Command> setClipFades(model::ClipId id, Rational fadeIn, Rational fadeOut,
+                                                    GestureId gesture = 0);
 [[nodiscard]] std::unique_ptr<Command> setClipEnabled(model::ClipId id, bool enabled);
 [[nodiscard]] std::unique_ptr<Command> renameClip(model::ClipId id, std::string name);
 [[nodiscard]] std::unique_ptr<Command> addEffect(model::ClipId id, model::Effect effect);

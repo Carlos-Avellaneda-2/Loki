@@ -58,6 +58,26 @@ const std::vector<EffectDef>& effectRegistry() {
             {"blendMode", "Blend Mode", 0, DefaultKind::Constant, 0, kBlendModeCount - 1, 1, 0, "", modes, false},
         };
         r.push_back(std::move(opacity));
+
+        EffectDef volume;
+        volume.type = std::string(kVolumeEffect);
+        volume.label = "Volume";
+        volume.fixed = true;
+        volume.kind = TrackKind::Audio;
+        volume.parameters = {
+            {"level", "Level", 0, DefaultKind::Constant, kSilenceDb, 15, 0.5, 1, "dB", {}, true},
+        };
+        r.push_back(std::move(volume));
+
+        EffectDef panner;
+        panner.type = std::string(kPannerEffect);
+        panner.label = "Panner";
+        panner.fixed = true;
+        panner.kind = TrackKind::Audio;
+        panner.parameters = {
+            {"pan", "Pan", 0, DefaultKind::Constant, -100, 100, 1, 1, "", {}, true},
+        };
+        r.push_back(std::move(panner));
         return r;
     }();
     return kRegistry;
@@ -132,6 +152,17 @@ ClipTransform resolveTransform(const Clip& clip, const Rational& t, const MediaI
     const auto mode = static_cast<int>(std::lround(v(kOpacityEffect, "blendMode")));
     x.blend = static_cast<BlendMode>(std::clamp(mode, 0, kBlendModeCount - 1));
     return x;
+}
+
+ClipAudioMix resolveAudioMix(const Clip& clip, const Rational& sourceTime) {
+    // Audio parameters have constant defaults, so no media/settings are needed.
+    static const MediaInfo kNoMedia;
+    static const SequenceSettings kNoSettings;
+    ClipAudioMix m;
+    m.levelDb = std::clamp(effectiveValue(clip, kVolumeEffect, "level", sourceTime, kNoMedia, kNoSettings), kSilenceDb,
+                           15.0);
+    m.pan = std::clamp(effectiveValue(clip, kPannerEffect, "pan", sourceTime, kNoMedia, kNoSettings), -100.0, 100.0);
+    return m;
 }
 
 } // namespace loki::model

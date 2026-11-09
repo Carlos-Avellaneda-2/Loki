@@ -147,6 +147,7 @@ public:
     void insertSequence(std::size_t index, Sequence sequence);
     Sequence removeSequence(SequenceId id, std::size_t* indexOut = nullptr);
     void setSequenceName(SequenceId id, std::string name);
+    void setSequenceMasterVolume(SequenceId id, double db);
     void setSequenceSettings(SequenceId id, SequenceSettings settings);
     void setSequenceMarks(SequenceId id, std::optional<Rational> in, std::optional<Rational> out);
 

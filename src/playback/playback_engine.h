@@ -38,6 +38,13 @@ struct PlaybackOptions {
     int lookAheadFrames = 8;
 };
 
+// Levels heard now (meters). Empty/inactive while not playing at 1x.
+struct MixLevels {
+    bool active = false;
+    audio::StereoLevel master;
+    std::vector<TrackLevel> tracks; // sequence mode: one entry per audio track
+};
+
 struct PlaybackStats {
     std::uint64_t framesShown = 0;
     std::uint64_t framesDropped = 0;
@@ -97,6 +104,8 @@ public:
     [[nodiscard]] std::optional<TimedFrame> currentPicture() const;
 
     [[nodiscard]] PlaybackStats stats() const;
+    // Peak/RMS of what was heard during the last ~50 ms (UI meters; never blocks for long).
+    [[nodiscard]] MixLevels levels() const;
     [[nodiscard]] bool hasAudioOutput() const noexcept { return m_device != nullptr; }
 
     // Test helper: waits until pending requests were processed. Returns false on timeout.
@@ -153,6 +162,16 @@ private:
     int m_maxWidth = 0;
     int m_maxHeight = 0;
     std::vector<float> m_audioScratch;
+    std::int64_t m_audioWriteFrame = 0; // timeline frame (device rate) of the next block written
+
+    struct MeterBlock {
+        std::int64_t start = 0;
+        std::int64_t frames = 0;
+        audio::StereoLevel master;
+        std::vector<TrackLevel> tracks;
+    };
+    mutable std::mutex m_meterMutex;
+    std::deque<MeterBlock> m_meterBlocks; // ascending start
 
     // Shared, read by the UI thread.
     std::atomic<bool> m_open{false};

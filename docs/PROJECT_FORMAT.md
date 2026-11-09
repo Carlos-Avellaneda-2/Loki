@@ -51,6 +51,11 @@ movió la carpeta del proyecto junto con ellos.
 - `videoTracks[0]` es V1, la pista de abajo.
 - Los `time` de los keyframes están en el tiempo del *source* del clip.
 - `interpolation` puede ser `hold`, `linear` o `bezier`.
+- Mezcla de audio (Fase 8): campos opcionales que se omiten cuando valen lo mismo que por defecto.
+  - Pistas: `"volumeDb"` (0), `"pan"` (0, rango −100…100) y `"solo"` (false).
+  - Secuencias: `"masterVolumeDb"` (0).
+  - Clips: `"fadeIn"` y `"fadeOut"`, tiempos `[num, den]` (sin fundido si faltan).
+  - El volumen y el paneo de clip son efectos `loki.volume` (`level`, en dB) y `loki.panner` (`pan`).
 - Una secuencia puede tener `"markIn"` y `"markOut"` (tiempos `[num, den]`, opcionales, Out exclusivo). Si
   faltan, la secuencia no tiene marcas; los archivos v1 anteriores siguen siendo válidos (D13).
 

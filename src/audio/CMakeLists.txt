@@ -2,6 +2,8 @@
 add_library(loki_audio STATIC
     audio_device.h
     miniaudio_device.cpp
+    mixer.h
+    mixer.cpp
 )
 add_library(loki::audio ALIAS loki_audio)
 
