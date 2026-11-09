@@ -268,6 +268,28 @@ sequenceDiagram
 - **Monitor de Origen.** `,` inserta y `.` sobrescribe en el cabezal del Programa, usando las pistas destino.
   Después de la edición el cabezal salta al final del clip.
 
+## 7d. Composición y efectos (Fase 6, D11–D12)
+
+- `model::effectRegistry()` define los efectos y sus parámetros: rango, unidad, enum y valor por defecto, que
+  puede ser fijo o calculado (centro de la secuencia o del medio).
+  - Movimiento (`loki.motion`) y Opacidad (`loki.opacity`) son efectos fijos: siempre aparecen en el panel y
+    solo se guardan en el `.loki` al primer cambio (D12).
+  - `resolveTransform()` evalúa ambos efectos para un clip en un instante.
+- `render::CompositeFrame` (en `loki_render_core`, sin Qt) es la lista de capas de abajo arriba: fotograma,
+  tamaño de origen y transformación ya resuelta. `SequenceVideoSource` la arma para cada instante usando un
+  decodificador por clip (D11).
+- `render::GlCompositor` (en `loki_render`, OpenGL 3.3):
+  - Usa dos FBO RGBA16F en ping-pong. Por cada capa copia la imagen acumulada al otro FBO (blit) y dibuja la
+    capa transformada, leyendo lo acumulado para aplicar el modo de fusión en espacio gamma.
+  - Las fórmulas de mezcla tienen una referencia idéntica en CPU (`render::blendColor`).
+  - `loki_gl_tests` compara la GPU con esa referencia; requiere GPU y se omite en CI.
+  - En vista previa compone al menor tamaño entre la secuencia y el monitor en pantalla.
+  - El export (Fase 10) usará la misma clase en un contexto fuera de pantalla.
+- Panel de Controles de Efectos: cronómetro, valor, navegación de keyframes y una pista de keyframes (arrastrar
+  para mover, clic derecho para elegir la interpolación).
+  - Las ediciones usan `commands::setEffectParameter` y relacionados. Mientras se anima, un cambio de valor crea
+    un keyframe en el cabezal (tiempo del origen del clip).
+
 ## 8. Export
 
 - Mismo grafo que playback, reloj "offline" (frame a frame), sumidero = encoder.

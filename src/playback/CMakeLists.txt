@@ -10,5 +10,5 @@ add_library(loki_playback STATIC
 add_library(loki::playback ALIAS loki_playback)
 
 target_include_directories(loki_playback PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(loki_playback PUBLIC loki::audio loki::media loki::model loki::util)
+target_link_libraries(loki_playback PUBLIC loki::audio loki::media loki::model loki::render_core loki::util)
 loki_set_warnings(loki_playback)

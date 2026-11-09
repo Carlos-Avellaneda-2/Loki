@@ -207,7 +207,13 @@ void ProgramMonitorPanel::tick() {
     m_scrub->setPosition(position);
     m_timecode->setText(timecode(position, m_engine->frameRate()));
     m_playButton->setIcon(style()->standardIcon(m_engine->isPlaying() ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
-    m_view->setFrame(m_engine->currentFrame());
+    (void)m_engine->currentFrame(); // advances the displayed picture with the clock
+    const auto picture = m_engine->currentPicture();
+    if (picture && picture->composite) {
+        m_view->setComposite(picture->composite);
+    } else {
+        m_view->setComposite(nullptr);
+    }
 }
 
 } // namespace loki::ui

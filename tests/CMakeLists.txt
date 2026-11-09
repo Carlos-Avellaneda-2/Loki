@@ -43,10 +43,11 @@ loki_add_test_executable(loki_commands_tests
     SOURCES
         commands/clip_commands_test.cpp
         commands/edit_commands_test.cpp
+        commands/effect_commands_test.cpp
         commands/project_commands_test.cpp
         commands/random_edit_test.cpp
         commands/undo_stack_test.cpp
-    LIBS loki::commands GTest::gtest GTest::gtest_main)
+    LIBS loki::commands loki::render_core GTest::gtest GTest::gtest_main)
 
 # Synthetic media generated with the linked FFmpeg encoders (D8).
 add_library(loki_test_support STATIC
@@ -79,7 +80,18 @@ loki_add_test_executable(loki_app_tests
         app/theme_test.cpp
         ui/project_controller_test.cpp
         ui/project_panel_test.cpp
+        ui/effect_controls_test.cpp
         ui/source_monitor_test.cpp
         ui/timeline_test.cpp
         qt_test_main.cpp
     LIBS loki::app loki_test_support Qt6::Test GTest::gtest)
+
+# Real OpenGL compositor test: runs on the native platform (needs a GPU with OpenGL 3.3; skipped
+# when unavailable, e.g. on CI runners).
+add_executable(loki_gl_tests render/gl_compositor_test.cpp)
+target_link_libraries(loki_gl_tests PRIVATE loki::render GTest::gtest)
+loki_set_warnings(loki_gl_tests)
+gtest_add_tests(TARGET loki_gl_tests SOURCES render/gl_compositor_test.cpp TEST_LIST _gl_tests)
+set_tests_properties(${_gl_tests} PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${LOKI_QT_BIN_DIR};QT_QPA_PLATFORM=set:windows"
+    TIMEOUT 60)

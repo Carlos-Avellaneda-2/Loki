@@ -2,6 +2,7 @@
 
 #include "media/audio_decoder.h"
 #include "media/video_decoder.h"
+#include "model/effect_registry.h"
 #include "model/project_json.h"
 
 #include <spdlog/spdlog.h>
@@ -12,7 +13,7 @@ namespace loki::playback {
 
 namespace {
 
-constexpr std::size_t kMaxOpenVideoDecoders = 6;
+constexpr std::size_t kMaxOpenVideoDecoders = 8;
 constexpr int kReverseRun = 8;
 
 std::optional<TimedFrame> timed(const media::VideoFramePtr& f) {
@@ -92,12 +93,12 @@ SequenceVideoSource::SequenceVideoSource(std::shared_ptr<const SequenceSnapshot>
 
 SequenceVideoSource::~SequenceVideoSource() = default;
 
-media::VideoDecoder* SequenceVideoSource::decoderFor(const model::MediaItem& media) {
+media::VideoDecoder* SequenceVideoSource::decoderFor(const model::Clip& clip, const model::MediaItem& media) {
     if (m_offline.contains(media.id)) {
         return nullptr;
     }
     for (auto it = m_decoders.begin(); it != m_decoders.end(); ++it) {
-        if (it->first == media.id) {
+        if (it->first == clip.id) {
             m_decoders.splice(m_decoders.begin(), m_decoders, it);
             return m_decoders.front().second.get();
         }
@@ -107,7 +108,7 @@ media::VideoDecoder* SequenceVideoSource::decoderFor(const model::MediaItem& med
         options.allowHardware = m_allowHardware && !media.info.isStill;
         options.maxWidth = m_maxWidth;
         options.maxHeight = m_maxHeight;
-        m_decoders.emplace_front(media.id, std::make_unique<media::VideoDecoder>(media.path, options));
+        m_decoders.emplace_front(clip.id, std::make_unique<media::VideoDecoder>(media.path, options));
     } catch (const std::exception& e) {
         spdlog::warn("Media offline for playback ({}): {}", model::pathToUtf8(media.path), e.what());
         m_offline.insert(media.id);
@@ -125,25 +126,42 @@ std::optional<TimedFrame> SequenceVideoSource::frameAt(const Rational& requested
     if (t >= seq.duration()) {
         return std::nullopt;
     }
-    TimedFrame result{t, m_frameDuration, nullptr};
-    // Topmost visible track wins (V1 is index 0, so walk backwards).
-    for (auto it = seq.videoTracks.rbegin(); it != seq.videoTracks.rend(); ++it) {
-        if (it->state.hidden) {
+    auto composite = std::make_shared<render::CompositeFrame>();
+    composite->width = seq.settings.width;
+    composite->height = seq.settings.height;
+    // V1 (index 0) is the bottom layer.
+    for (const auto& track : seq.videoTracks) {
+        if (track.state.hidden) {
             continue;
         }
-        const auto clip = std::find_if(it->clips.begin(), it->clips.end(),
+        const auto clip = std::find_if(track.clips.begin(), track.clips.end(),
                                        [&](const model::Clip& c) { return c.start <= t && t < c.end(); });
-        if (clip == it->clips.end() || !clip->enabled) {
+        if (clip == track.clips.end() || !clip->enabled) {
             continue;
         }
         const auto media = m_snapshot->media.find(clip->media);
         if (media == m_snapshot->media.end() || !media->second.info.hasVideo) {
             continue;
         }
-        if (auto* decoder = decoderFor(media->second)) {
-            result.frame = decoder->frameAt(clip->toSourceTime(t));
+        auto* decoder = decoderFor(*clip, media->second);
+        if (decoder == nullptr) {
+            continue;
         }
-        break;
+        const Rational sourceTime = clip->toSourceTime(t);
+        render::Layer layer;
+        layer.frame = decoder->frameAt(sourceTime);
+        if (!layer.frame) {
+            continue;
+        }
+        layer.sourceWidth = media->second.info.width > 0 ? media->second.info.width : layer.frame->width;
+        layer.sourceHeight = media->second.info.height > 0 ? media->second.info.height : layer.frame->height;
+        layer.transform = model::resolveTransform(*clip, sourceTime, media->second.info, seq.settings);
+        composite->layers.push_back(std::move(layer));
+    }
+    TimedFrame result{t, m_frameDuration, nullptr, nullptr};
+    if (!composite->layers.empty()) {
+        result.frame = composite->layers.back().frame;
+        result.composite = std::move(composite);
     }
     return result;
 }

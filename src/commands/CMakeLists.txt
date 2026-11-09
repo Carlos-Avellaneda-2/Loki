@@ -5,6 +5,8 @@ add_library(loki_commands STATIC
     command.h
     command.cpp
     edit_commands.h
+    effect_commands.h
+    effect_commands.cpp
     edit_commands.cpp
     project_commands.h
     project_commands.cpp

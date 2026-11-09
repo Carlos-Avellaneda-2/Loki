@@ -18,6 +18,7 @@ class ProjectController;
 class ProjectPanel;
 class SourceMonitorPanel;
 class ProgramMonitorPanel;
+class EffectControlsPanel;
 namespace timeline {
 class TimelinePanel;
 } // namespace timeline
@@ -64,6 +65,7 @@ public:
     [[nodiscard]] ui::ProjectPanel* projectPanel() const noexcept { return m_projectPanel; }
     [[nodiscard]] ui::SourceMonitorPanel* sourceMonitor() const noexcept { return m_sourceMonitor; }
     [[nodiscard]] ui::ProgramMonitorPanel* programMonitor() const noexcept { return m_programMonitor; }
+    [[nodiscard]] ui::EffectControlsPanel* effectControls() const noexcept { return m_effectControls; }
     [[nodiscard]] ui::timeline::TimelinePanel* timeline() const noexcept { return m_timeline; }
     [[nodiscard]] model::SequenceId activeSequence() const noexcept { return m_activeSequence; }
     // Insert/Overwrite from the Source Monitor at the Program playhead (public for tests).
@@ -90,6 +92,7 @@ private:
     ui::ProjectPanel* m_projectPanel = nullptr;    // owned by its dock widget
     ui::SourceMonitorPanel* m_sourceMonitor = nullptr; // owned by its dock widget
     ui::ProgramMonitorPanel* m_programMonitor = nullptr; // owned by its dock widget
+    ui::EffectControlsPanel* m_effectControls = nullptr; // owned by its dock widget
     ui::timeline::TimelinePanel* m_timeline = nullptr;  // owned by its dock widget
     model::SequenceId m_activeSequence;
     playback::PlaybackOptions m_playbackOptions;

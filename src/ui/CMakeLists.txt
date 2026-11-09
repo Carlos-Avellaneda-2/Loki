@@ -1,4 +1,6 @@
 add_library(loki_ui STATIC
+    effect_controls_panel.h
+    effect_controls_panel.cpp
     media_services.h
     program_monitor_panel.h
     program_monitor_panel.cpp

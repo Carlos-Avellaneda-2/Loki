@@ -2,6 +2,7 @@
 #include "model/project.h"
 #include "playback/playback_engine.h"
 #include "playback/sources.h"
+#include "model/effect_registry.h"
 
 #include "media_assets.h"
 
@@ -66,6 +67,26 @@ TEST_F(SequenceSourceTest, MapsSequenceTimeToClipSourceTime) {
     EXPECT_EQ(f->time, Rational(30, 25));
     EXPECT_EQ(f->duration, Rational(1, 25));
     EXPECT_NEAR(luma(f->frame), expectedLuma(15), 3);
+}
+
+TEST_F(SequenceSourceTest, CompositeHasEveryVisibleLayerBottomToTop) {
+    auto s = snapshot();
+    s->sequence.videoTracks[0].clips.push_back(clip(video, Rational(0), Rational(1), Rational(0)));
+    auto top = clip(video, Rational(0), Rational(1), Rational(20, 25));
+    auto opacity = model::makeEffect(model::kOpacityEffect, video.info, s->sequence.settings);
+    opacity.parameters[0].keyframes = {{Rational(20, 25), 100.0}, {Rational(30, 25), 0.0}};
+    top.effects.push_back(opacity);
+    s->sequence.videoTracks[1].clips.push_back(top);
+    SequenceVideoSource src(s, false, 0, 0);
+    const auto f = src.frameAt(Rational(5, 25)); // top clip source time 25/25: opacity 50%
+    ASSERT_TRUE(f.has_value());
+    ASSERT_NE(f->composite, nullptr);
+    ASSERT_EQ(f->composite->layers.size(), 2u);
+    EXPECT_NEAR(luma(f->composite->layers[0].frame), expectedLuma(5), 3);
+    EXPECT_NEAR(luma(f->composite->layers[1].frame), expectedLuma(25), 3);
+    EXPECT_DOUBLE_EQ(f->composite->layers[1].transform.opacity, 50.0);
+    EXPECT_EQ(f->composite->width, s->sequence.settings.width);
+    EXPECT_EQ(f->frame, f->composite->layers[1].frame);
 }
 
 TEST_F(SequenceSourceTest, GapsAreBlackAndEndIsNullopt) {

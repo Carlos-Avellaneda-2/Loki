@@ -74,6 +74,7 @@ public:
 
 signals:
     void statusMessage(const QString& text);
+    void selectionChanged();
     void toolChanged(loki::ui::timeline::Tool tool);
     void snappingChanged(bool on);
     void zoomChanged(double pixelsPerSecond);

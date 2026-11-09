@@ -208,6 +208,11 @@ Rational PlaybackEngine::currentFrameTime() const {
     return m_current ? m_current->time : Rational();
 }
 
+std::optional<TimedFrame> PlaybackEngine::currentPicture() const {
+    std::lock_guard lock(m_displayMutex);
+    return m_current;
+}
+
 PlaybackStats PlaybackEngine::stats() const {
     PlaybackStats s;
     s.framesShown = m_shown;
@@ -318,6 +323,7 @@ void PlaybackEngine::process(Requests requests) {
             m_video->setMaxSize(m_maxWidth, m_maxHeight);
         }
         m_cache->clear();
+        m_compositeCache.clear();
         if (!requests.seek) {
             requests.seek = m_clock.now();
         }
@@ -338,6 +344,7 @@ void PlaybackEngine::doClose() {
     m_audio.reset();
     m_snapshot.reset();
     m_cache->clear();
+    m_compositeCache.clear();
     clearQueue();
     {
         std::lock_guard lock(m_displayMutex);
@@ -405,6 +412,7 @@ void PlaybackEngine::doOpenSequence(std::shared_ptr<const SequenceSnapshot> snap
         clearQueue();
     }
     m_snapshot = std::move(snapshot);
+    m_compositeCache.clear();
     if (!m_snapshot) {
         return;
     }
@@ -457,28 +465,42 @@ void PlaybackEngine::applyTransport(int rate, const Rational& position) {
     }
 }
 
+namespace {
+constexpr std::size_t kCompositeCacheEntries = 48;
+} // namespace
+
 void PlaybackEngine::cachePut(const TimedFrame& f) {
-    if (f.frame) {
-        m_cache->put({m_cacheSource, m_maxWidth, frameIndexOf(f.time)}, f.frame);
+    if (!f.frame) {
+        return;
     }
+    if (m_snapshot) {
+        const auto index = frameIndexOf(f.time);
+        std::erase_if(m_compositeCache, [index](const auto& e) { return e.first == index; });
+        m_compositeCache.emplace_front(index, f);
+        if (m_compositeCache.size() > kCompositeCacheEntries) {
+            m_compositeCache.pop_back();
+        }
+        return;
+    }
+    m_cache->put({m_cacheSource, m_maxWidth, frameIndexOf(f.time)}, f.frame);
 }
 
 std::optional<TimedFrame> PlaybackEngine::cacheGet(const Rational& t) {
     const auto index = frameIndexOf(t);
+    if (m_snapshot) {
+        for (auto it = m_compositeCache.begin(); it != m_compositeCache.end(); ++it) {
+            if (it->first == index) {
+                m_compositeCache.splice(m_compositeCache.begin(), m_compositeCache, it);
+                return m_compositeCache.front().second;
+            }
+        }
+        return std::nullopt;
+    }
     auto frame = m_cache->get({m_cacheSource, m_maxWidth, index});
     if (!frame) {
         return std::nullopt;
     }
-    bool sequence = false;
-    {
-        std::lock_guard lock(m_infoMutex);
-        sequence = m_sequenceMode;
-    }
-    if (!sequence) {
-        return TimedFrame{frame->pts, frame->duration, frame};
-    }
-    const Rational rate = frameRate();
-    return TimedFrame{framesToTime(index, rate), rate.reciprocal(), frame};
+    return TimedFrame{frame->pts, frame->duration, frame, nullptr};
 }
 
 void PlaybackEngine::showFrameAt(const Rational& t) {

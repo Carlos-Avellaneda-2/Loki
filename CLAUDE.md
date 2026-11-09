@@ -54,6 +54,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
   Helpers en `tests/support/` (TempDir, model_fixtures, MediaAssets = medios sintéticos generados con libav:
   luma de cada fotograma = `expectedLuma(i)`). Datos en `tests/data/` (`LOKI_TEST_DATA_DIR`).
   Motor de playback testeable con `ManualAudioDevice` + `TimeSource` falso.
+  `loki_gl_tests` corre en plataforma nativa (GPU real); se omite si no hay OpenGL 3.3.
   Tests con Qt enlazan `tests/qt_test_main.cpp`. Assets pequeños generados con FFmpeg en `tests/assets`.
 - Commits: Conventional Commits, autor = usuario (git config del repo). **Sin `Co-Authored-By` ni otra
   atribución**: el usuario debe figurar como único colaborador.
@@ -84,7 +85,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 3. Medios — probe, decoders (hwaccel+fallback), FrameCache, MediaCache, thumbnails, waveforms, Project panel
 - [x] 4. Reproducción — PlaybackClock (audio master), PlaybackEngine, J/K/L, scrub, Source Monitor GL
 - [x] 5. Línea de tiempo + Monitor de Programa — EditPlan/ReplaceClipsCommand (insert/overwrite/razor/move/trim/delete), sources de playback (archivo/secuencia), TimelineView, Program Monitor, 251 tests
-- [ ] 6. Composición GPU y efectos
+- [x] 6. Composición GPU y efectos — effect registry, CompositeFrame (render_core), GlCompositor ping-pong RGBA16F + 8 blend modes, Effect Controls con keyframes, 269 tests (+4 GPU)
 - [ ] 7. Edición avanzada
 - [ ] 8. Audio
 - [ ] 9. Transiciones, color, títulos
@@ -94,6 +95,9 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],
   UUID, ruta abs+rel); sin solapes en pista.
 
+- D11–D14 (Fases 6/7): composición = descripción pura (render_core) + GlCompositor en el monitor (mismo
+  compositor para export); Movimiento/Opacidad fijos guardados al primer cambio, escalado por defecto ninguno;
+  marcas In/Out de secuencia opcionales (v1); ripple delete solo desplaza pistas con el tramo libre.
 - D5–D10 (Fases 3/4): FFmpeg compilado una vez con todas las features LGPL; monitores en OpenGL (copia de hw
   frames a RAM, sin zero-copy); miniaudio adelantado a Fase 4; assets de test generados en runtime con libav;
   marcas In/Out opcionales en MediaItem (v1 compatible); caché configurable (usuario: F:\LokiCache).

@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <list>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -92,6 +93,8 @@ public:
     [[nodiscard]] media::VideoFramePtr currentFrame();
     // Timeline time of the picture returned by the last currentFrame() call.
     [[nodiscard]] Rational currentFrameTime() const;
+    // Picture selected by the last currentFrame() call, including the composite for sequences.
+    [[nodiscard]] std::optional<TimedFrame> currentPicture() const;
 
     [[nodiscard]] PlaybackStats stats() const;
     [[nodiscard]] bool hasAudioOutput() const noexcept { return m_device != nullptr; }
@@ -135,7 +138,8 @@ private:
     PlaybackClock m_clock;
     std::unique_ptr<audio::AudioDevice> m_device;
     std::unique_ptr<util::SpscRing<float>> m_ring;
-    std::unique_ptr<media::FrameCache> m_cache;
+    std::unique_ptr<media::FrameCache> m_cache; // file mode
+    std::list<std::pair<std::int64_t, TimedFrame>> m_compositeCache; // sequence mode (LRU by frame index)
 
     // Media-thread state.
     std::unique_ptr<VideoSource> m_video;

@@ -2,6 +2,8 @@
 
 #include "media/video_frame.h"
 #include "media/waveform.h"
+#include "render/composite.h"
+#include "render/gl_compositor.h"
 #include "render/gl_frame_renderer.h"
 
 #include <QOpenGLWindow>
@@ -35,11 +37,14 @@ public:
 
     // Schedules a repaint only when the frame actually changed.
     void setFrame(media::VideoFramePtr frame);
+    // Multitrack picture (sequences); null composite shows black.
+    void setComposite(render::CompositePtr composite);
     void setWaveform(std::shared_ptr<const media::Waveform> waveform, Rational position);
     void clear();
 
     [[nodiscard]] const media::VideoFramePtr& frame() const noexcept;
     [[nodiscard]] bool rendererReady() const noexcept;
+    [[nodiscard]] VideoWindow* window() const noexcept { return m_window; }
 
 private:
     VideoWindow* m_window = nullptr; // owned by the container widget
@@ -59,10 +64,12 @@ public:
     VideoWindow& operator=(VideoWindow&&) = delete;
 
     void setFrame(media::VideoFramePtr frame);
+    void setComposite(render::CompositePtr composite);
     void setWaveform(std::shared_ptr<const media::Waveform> waveform, Rational position);
     void clear();
 
     [[nodiscard]] const media::VideoFramePtr& frame() const noexcept { return m_frame; }
+    [[nodiscard]] const render::CompositePtr& composite() const noexcept { return m_composite; }
     [[nodiscard]] bool rendererReady() const noexcept { return m_ready; }
 
 protected:
@@ -74,6 +81,11 @@ private:
     void paintWaveform(); // QPainter on top of the GL clear (inside paintGL)
 
     render::GlFrameRenderer m_renderer;
+    render::GlCompositor m_compositor;
+    render::CompositePtr m_composite;
+    render::CompositePtr m_rendered; // composite currently in the compositor's framebuffer
+    int m_renderedWidth = 0;
+    int m_renderedHeight = 0;
     media::VideoFramePtr m_frame;
     media::VideoFramePtr m_uploaded;
     std::shared_ptr<const media::Waveform> m_waveform;

@@ -1,5 +1,7 @@
 # Document model. Pure C++: no Qt dependency (D1), read-only public API (D2).
 add_library(loki_model STATIC
+    effect_registry.h
+    effect_registry.cpp
     ids.h
     keyframe.h
     keyframe.cpp

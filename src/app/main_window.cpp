@@ -7,6 +7,7 @@
 #include "ui/project_controller.h"
 #include "ui/project_panel.h"
 #include "commands/edit_commands.h"
+#include "ui/effect_controls_panel.h"
 #include "ui/program_monitor_panel.h"
 #include "ui/source_monitor_panel.h"
 #include "ui/timeline/timeline_panel.h"
@@ -85,6 +86,34 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
         dockWidget(ui::PanelId::SourceMonitor)->raise();
     });
     m_timeline->setTransport(m_programMonitor->transport());
+    m_effectControls->setPlayhead({[this] { return m_programMonitor->engine().position(); },
+                                   [this](const Rational& t) { m_programMonitor->engine().seek(t); }});
+    connect(m_timeline->view(), &ui::timeline::TimelineView::selectionChanged, this, [this] {
+        // Show the selected clip (for a linked A/V pair, the video part).
+        const auto& selection = m_timeline->view()->selection();
+        const auto& project = m_controller->project();
+        model::ClipId pick;
+        model::LinkId link;
+        bool single = true;
+        for (const auto id : selection) {
+            const auto ref = project.findClip(id);
+            if (ref.clip == nullptr) {
+                continue;
+            }
+            if (pick && (ref.clip->link.isNull() || ref.clip->link != link)) {
+                single = false;
+                break;
+            }
+            if (!pick || ref.track->kind == model::TrackKind::Video) {
+                pick = id;
+                link = ref.clip->link;
+            }
+        }
+        m_effectControls->setClip(single ? pick : model::ClipId());
+        if (single && pick) {
+            dockWidget(ui::PanelId::EffectControls)->raise();
+        }
+    });
     connect(m_timeline, &ui::timeline::TimelinePanel::statusMessage, this,
             [this](const QString& text) { statusBar()->showMessage(text, 5000); });
     connect(m_sourceMonitor, &ui::SourceMonitorPanel::editRequested, this, &MainWindow::sourceEdit);
@@ -175,6 +204,10 @@ QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
     case ui::PanelId::Project: {
         m_projectPanel = new ui::ProjectPanel(*m_controller, *m_services);
         return m_projectPanel;
+    }
+    case ui::PanelId::EffectControls: {
+        m_effectControls = new ui::EffectControlsPanel(*m_controller);
+        return m_effectControls;
     }
     case ui::PanelId::Timeline: {
         m_timeline = new ui::timeline::TimelinePanel(*m_controller, *m_services);

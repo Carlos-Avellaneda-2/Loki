@@ -59,11 +59,16 @@ TimelineView::TimelineView(ProjectController& controller, MediaServices& service
     setAttribute(Qt::WA_OpaquePaintEvent);
     connect(&m_controller, &ProjectController::projectChanged, this, [this](const model::ChangeEvent&) {
         // Drop selected clips that no longer exist (deleted, undone).
-        std::erase_if(m_selection, [this](model::ClipId id) { return m_controller.project().findClip(id).clip == nullptr; });
+        const auto removed = std::erase_if(
+            m_selection, [this](model::ClipId id) { return m_controller.project().findClip(id).clip == nullptr; });
+        if (removed > 0) {
+            emit selectionChanged();
+        }
         update();
     });
     connect(&m_controller, &ProjectController::projectReset, this, [this] {
         m_selection.clear();
+        emit selectionChanged();
         update();
     });
     connect(&m_services, &MediaServices::thumbnailReady, this, [this] { update(); });
@@ -73,6 +78,7 @@ TimelineView::TimelineView(ProjectController& controller, MediaServices& service
 void TimelineView::setSequence(model::SequenceId id) {
     m_sequence = id;
     m_selection.clear();
+        emit selectionChanged();
     m_targetVideo = {};
     m_targetAudio = {};
     if (const auto* seq = sequence()) {
@@ -107,6 +113,7 @@ void TimelineView::setSnapping(bool on) {
 
 void TimelineView::setSelection(std::set<model::ClipId> clips) {
     m_selection = std::move(clips);
+    emit selectionChanged();
     update();
 }
 
@@ -518,9 +525,11 @@ void TimelineView::selectWithLinked(model::ClipId clip, bool toggle, bool add) {
     } else {
         if (!toggle && !add && !selected) {
             m_selection.clear();
+        emit selectionChanged();
         }
         m_selection.insert(group.begin(), group.end());
     }
+    emit selectionChanged();
     update();
 }
 
@@ -584,6 +593,7 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
     if (!hit.clip) {
         if (!event->modifiers().testFlag(Qt::ControlModifier)) {
             m_selection.clear();
+        emit selectionChanged();
             update();
         }
         return;
@@ -595,8 +605,10 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
         if (unlink) {
             if (!toggle && !add) {
                 m_selection.clear();
+        emit selectionChanged();
             }
             m_selection.insert(hit.clip);
+            emit selectionChanged();
             update();
         } else {
             selectWithLinked(hit.clip, toggle, add);
@@ -608,6 +620,7 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
     } else {
         if (!m_selection.contains(hit.clip)) {
             m_selection.clear();
+        emit selectionChanged();
             selectWithLinked(hit.clip, false, false);
         }
         m_drag = hit.zone == HitZone::InEdge ? Drag::TrimIn : Drag::TrimOut;

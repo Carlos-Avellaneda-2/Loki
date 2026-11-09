@@ -2,6 +2,7 @@
 
 #include "media/video_frame.h"
 #include "model/types.h"
+#include "render/composite.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -24,7 +25,8 @@ namespace loki::playback {
 struct TimedFrame {
     Rational time;     // timeline time where this picture starts
     Rational duration; // how long it is shown
-    media::VideoFramePtr frame;
+    media::VideoFramePtr frame;   // single picture (file playback) or the topmost layer (sequences)
+    render::CompositePtr composite; // sequences: every layer to composite (null for files)
 };
 
 // Video provider for the playback engine. Called only from the engine's media thread.
@@ -107,7 +109,9 @@ struct SequenceSnapshot {
     std::uint64_t generation = 0; // changes with every edit (frame cache key)
 };
 
-// Phase 5: shows the topmost enabled clip on a visible video track (no compositing yet).
+// Builds the composite of every enabled clip on visible video tracks (V1 at the bottom) with its
+// Motion and Opacity resolved at the time (D11). One decoder per clip so the same media used twice
+// does not make one decoder seek back and forth.
 class SequenceVideoSource final : public VideoSource {
 public:
     SequenceVideoSource(std::shared_ptr<const SequenceSnapshot> snapshot, bool allowHardware, int maxWidth,
@@ -120,7 +124,7 @@ public:
     void setMaxSize(int maxWidth, int maxHeight) override;
 
 private:
-    media::VideoDecoder* decoderFor(const model::MediaItem& media);
+    media::VideoDecoder* decoderFor(const model::Clip& clip, const model::MediaItem& media);
 
     std::shared_ptr<const SequenceSnapshot> m_snapshot;
     bool m_allowHardware;
@@ -128,7 +132,7 @@ private:
     int m_maxHeight;
     Rational m_frameDuration;
     Rational m_next;
-    std::list<std::pair<model::MediaId, std::unique_ptr<media::VideoDecoder>>> m_decoders; // LRU
+    std::list<std::pair<model::ClipId, std::unique_ptr<media::VideoDecoder>>> m_decoders; // LRU
     std::unordered_set<model::MediaId> m_offline;
 };
 

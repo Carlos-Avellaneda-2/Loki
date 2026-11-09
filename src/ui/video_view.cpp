@@ -1,5 +1,7 @@
 #include "ui/video_view.h"
 
+#include "render/color_conversion.h"
+
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QPainter>
@@ -33,6 +35,10 @@ void VideoView::setFrame(media::VideoFramePtr frame) {
     m_window->setFrame(std::move(frame));
 }
 
+void VideoView::setComposite(render::CompositePtr composite) {
+    m_window->setComposite(std::move(composite));
+}
+
 void VideoView::setWaveform(std::shared_ptr<const media::Waveform> waveform, Rational position) {
     m_window->setWaveform(std::move(waveform), position);
 }
@@ -61,17 +67,29 @@ void VideoWindow::releaseGl() {
     if (m_ready && context() != nullptr) {
         makeCurrent();
         m_renderer.release();
+        m_compositor.release();
         doneCurrent();
     }
     m_ready = false;
 }
 
+void VideoWindow::setComposite(render::CompositePtr composite) {
+    if (composite == m_composite && !m_frame && !m_waveform) {
+        return;
+    }
+    m_composite = std::move(composite);
+    m_frame.reset();
+    m_waveform.reset();
+    update();
+}
+
 void VideoWindow::setFrame(media::VideoFramePtr frame) {
-    if (frame == m_frame && !m_waveform) {
+    if (frame == m_frame && !m_waveform && !m_composite) {
         return;
     }
     m_frame = std::move(frame);
     m_waveform.reset();
+    m_composite.reset();
     update();
 }
 
@@ -82,12 +100,14 @@ void VideoWindow::setWaveform(std::shared_ptr<const media::Waveform> waveform, R
     m_waveform = std::move(waveform);
     m_waveformPosition = position;
     m_frame.reset();
+    m_composite.reset();
     update();
 }
 
 void VideoWindow::clear() {
     m_frame.reset();
     m_waveform.reset();
+    m_composite.reset();
     update();
 }
 
@@ -95,11 +115,13 @@ void VideoWindow::initializeGL() {
     connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this] {
         makeCurrent();
         m_renderer.release();
+        m_compositor.release();
         doneCurrent();
         m_ready = false;
         m_uploaded.reset();
+        m_rendered.reset();
     });
-    m_ready = m_renderer.initialize();
+    m_ready = m_renderer.initialize() && m_compositor.initialize();
     static bool logged = false; // log the driver once per process
     if (!logged) {
         logged = true;
@@ -119,6 +141,21 @@ void VideoWindow::paintGL() {
     const qreal dpr = devicePixelRatio();
     const int w = static_cast<int>(width() * dpr);
     const int h = static_cast<int>(height() * dpr);
+    if (m_ready && m_composite && m_composite->width > 0) {
+        // Composite at the smaller of the sequence size and the on-screen size (preview cost).
+        const auto fit = render::fitRect(static_cast<float>(m_composite->width), static_cast<float>(m_composite->height),
+                                         static_cast<float>(w), static_cast<float>(h));
+        const int fw = std::clamp(static_cast<int>(fit[2]), 2, m_composite->width);
+        const int fh = std::clamp(static_cast<int>(fit[3]), 2, m_composite->height);
+        if (m_composite != m_rendered || fw != m_renderedWidth || fh != m_renderedHeight) {
+            m_compositor.render(*m_composite, fw, fh);
+            m_rendered = m_composite;
+            m_renderedWidth = fw;
+            m_renderedHeight = fh;
+        }
+        m_compositor.present(defaultFramebufferObject(), w, h);
+        return;
+    }
     if (m_ready && m_frame) {
         if (m_frame != m_uploaded) {
             m_renderer.upload(*m_frame);
