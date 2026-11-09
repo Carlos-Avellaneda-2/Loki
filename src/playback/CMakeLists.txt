@@ -4,6 +4,8 @@ add_library(loki_playback STATIC
     playback_clock.cpp
     playback_engine.h
     playback_engine.cpp
+    sources.h
+    sources.cpp
 )
 add_library(loki::playback ALIAS loki_playback)
 

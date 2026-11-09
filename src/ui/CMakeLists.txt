@@ -1,5 +1,7 @@
 add_library(loki_ui STATIC
     media_services.h
+    program_monitor_panel.h
+    program_monitor_panel.cpp
     media_services.cpp
     panel_id.h
     panel_factory.h
@@ -18,6 +20,12 @@ add_library(loki_ui STATIC
     source_monitor_panel.cpp
     video_view.h
     video_view.cpp
+    timeline/timeline_geometry.h
+    timeline/timeline_geometry.cpp
+    timeline/timeline_panel.h
+    timeline/timeline_panel.cpp
+    timeline/timeline_view.h
+    timeline/timeline_view.cpp
 )
 add_library(loki::ui ALIAS loki_ui)
 

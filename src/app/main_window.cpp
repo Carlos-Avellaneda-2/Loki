@@ -6,7 +6,11 @@
 #include "ui/media_services.h"
 #include "ui/project_controller.h"
 #include "ui/project_panel.h"
+#include "commands/edit_commands.h"
+#include "ui/program_monitor_panel.h"
 #include "ui/source_monitor_panel.h"
+#include "ui/timeline/timeline_panel.h"
+#include "util/timecode.h"
 
 #include <DockAreaWidget.h>
 #include <DockManager.h>
@@ -80,6 +84,51 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
         m_sourceMonitor->loadMedia(id);
         dockWidget(ui::PanelId::SourceMonitor)->raise();
     });
+    m_timeline->setTransport(m_programMonitor->transport());
+    connect(m_timeline, &ui::timeline::TimelinePanel::statusMessage, this,
+            [this](const QString& text) { statusBar()->showMessage(text, 5000); });
+    connect(m_sourceMonitor, &ui::SourceMonitorPanel::editRequested, this, &MainWindow::sourceEdit);
+    connect(m_controller, &ui::ProjectController::projectReset, this, &MainWindow::activateFirstSequence);
+    connect(m_controller, &ui::ProjectController::projectChanged, this, [this](const model::ChangeEvent& e) {
+        if (e.kind == model::ChangeKind::SequenceRemoved && e.id == m_activeSequence.uuid()) {
+            activateFirstSequence();
+        } else if (e.kind == model::ChangeKind::SequenceAdded && !m_activeSequence) {
+            activateFirstSequence();
+        }
+    });
+    activateFirstSequence();
+}
+
+void MainWindow::activateFirstSequence() {
+    const auto& sequences = m_controller->project().sequences();
+    m_activeSequence = sequences.empty() ? model::SequenceId() : sequences.front().id;
+    m_timeline->setSequence(m_activeSequence);
+    m_programMonitor->setSequence(m_activeSequence);
+}
+
+void MainWindow::sourceEdit(model::MediaId media, bool insert) {
+    const auto& project = m_controller->project();
+    const auto* item = project.findMedia(media);
+    const auto* sequence = project.findSequence(m_activeSequence);
+    if (item == nullptr || sequence == nullptr) {
+        statusBar()->showMessage(tr("No active sequence"), 4000);
+        return;
+    }
+    const auto range = commands::sourceRangeOf(*item);
+    const Rational at = quantizeToFrame(m_programMonitor->engine().position(), sequence->settings.frameRate,
+                                        Rounding::Floor);
+    try {
+        auto command = insert ? commands::makeInsertEdit(project, m_activeSequence, range, at,
+                                                         m_timeline->view()->targets())
+                              : commands::makeOverwriteEdit(project, m_activeSequence, range, at,
+                                                            m_timeline->view()->targets());
+        if (command && m_controller->execute(std::move(command))) {
+            // Like Premiere: the playhead moves to the end of the new clip.
+            m_programMonitor->engine().seek(at + range.duration);
+        }
+    } catch (const std::exception& e) {
+        statusBar()->showMessage(QString::fromUtf8(e.what()), 5000);
+    }
 }
 
 MainWindow::~MainWindow() {
@@ -126,6 +175,14 @@ QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
     case ui::PanelId::Project: {
         m_projectPanel = new ui::ProjectPanel(*m_controller, *m_services);
         return m_projectPanel;
+    }
+    case ui::PanelId::Timeline: {
+        m_timeline = new ui::timeline::TimelinePanel(*m_controller, *m_services);
+        return m_timeline;
+    }
+    case ui::PanelId::ProgramMonitor: {
+        m_programMonitor = new ui::ProgramMonitorPanel(*m_controller, m_playbackOptions);
+        return m_programMonitor;
     }
     case ui::PanelId::SourceMonitor: {
         m_sourceMonitor = new ui::SourceMonitorPanel(*m_controller, *m_services, m_playbackOptions);

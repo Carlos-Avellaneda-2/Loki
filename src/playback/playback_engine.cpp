@@ -1,8 +1,6 @@
 #include "playback/playback_engine.h"
 
-#include "media/audio_decoder.h"
 #include "media/frame_cache.h"
-#include "media/video_decoder.h"
 #include "model/project_json.h"
 #include "util/spsc_ring.h"
 
@@ -55,10 +53,20 @@ void PlaybackEngine::open(const std::filesystem::path& path, const model::MediaI
     {
         std::lock_guard lock(m_requestMutex);
         m_requests = {};
-        m_requests.open = std::make_pair(path, info);
+        m_requests.open = FileRequest{path, info};
         m_pending = true;
     }
     m_requestedRate = 0;
+    m_wake.notify_all();
+}
+
+void PlaybackEngine::openSequence(std::shared_ptr<const SequenceSnapshot> snapshot) {
+    {
+        std::lock_guard lock(m_requestMutex);
+        m_requests.open = std::move(snapshot); // keeps pending seek/rate requests
+        m_requests.close = false;
+        m_pending = true;
+    }
     m_wake.notify_all();
 }
 
@@ -102,14 +110,15 @@ void PlaybackEngine::stepFrames(int frames) {
     Rational base;
     {
         std::lock_guard lock(m_displayMutex);
-        base = m_current ? m_current->pts : position();
+        base = m_current ? m_current->time : position();
     }
-    const Rational target = base + Rational(frames) / frameRate() + frameRate().reciprocal() / Rational(2);
+    const Rational rate = frameRate();
+    const Rational target = base + Rational(frames) / rate + rate.reciprocal() / Rational(2);
     m_requestedRate = 0;
     {
         std::lock_guard lock(m_requestMutex);
         m_requests.rate = 0;
-        m_requests.seek = clampTime(quantizeToFrame(target, frameRate(), Rounding::Floor));
+        m_requests.seek = clampTime(quantizeToFrame(target, rate, Rounding::Floor));
         m_pending = true;
     }
     m_wake.notify_all();
@@ -139,8 +148,19 @@ Rational PlaybackEngine::frameRate() const {
 }
 
 Rational PlaybackEngine::clampTime(const Rational& t) const {
-    const Rational d = duration();
-    const Rational last = d.isPositive() ? max(Rational(), d - frameRate().reciprocal()) : Rational();
+    Rational d;
+    Rational rate;
+    bool sequence = false;
+    {
+        std::lock_guard lock(m_infoMutex);
+        d = m_duration;
+        rate = m_frameRate;
+        sequence = m_sequenceMode;
+    }
+    if (sequence) {
+        return max(Rational(), t); // the timeline playhead may go past the last clip
+    }
+    const Rational last = d.isPositive() ? max(Rational(), d - rate.reciprocal()) : Rational();
     return min(max(Rational(), t), last);
 }
 
@@ -153,31 +173,39 @@ media::VideoFramePtr PlaybackEngine::currentFrame() {
     const int r = m_clock.rate();
     std::lock_guard lock(m_displayMutex);
     const auto discard = [this] {
-        if (m_queue.front() != m_current && m_queue.front() != m_lastCounted) {
+        const auto& front = m_queue.front();
+        const bool shown = (m_current && m_current->time == front.time) ||
+                           (m_lastCountedTime && *m_lastCountedTime == front.time);
+        if (!shown) {
             ++m_dropped;
         }
         m_queue.pop_front();
     };
     if (r > 0) {
-        while (!m_queue.empty() && m_queue.front()->pts + m_queue.front()->duration <= t && m_queue.size() > 1) {
+        while (m_queue.size() > 1 && m_queue.front().time + m_queue.front().duration <= t) {
             discard();
         }
-        if (!m_queue.empty() && m_queue.front()->pts <= t) {
+        if (!m_queue.empty() && m_queue.front().time <= t) {
             m_current = m_queue.front();
         }
     } else if (r < 0) {
-        while (!m_queue.empty() && m_queue.front()->pts > t && m_queue.size() > 1) {
+        while (m_queue.size() > 1 && m_queue.front().time > t) {
             discard();
         }
-        if (!m_queue.empty() && m_queue.front()->pts <= t + m_queue.front()->duration) {
+        if (!m_queue.empty() && m_queue.front().time <= t + m_queue.front().duration) {
             m_current = m_queue.front();
         }
     }
-    if (m_current && m_current != m_lastCounted) {
-        m_lastCounted = m_current;
+    if (m_current && (!m_lastCountedTime || *m_lastCountedTime != m_current->time)) {
+        m_lastCountedTime = m_current->time;
         ++m_shown;
     }
-    return m_current;
+    return m_current ? m_current->frame : nullptr;
+}
+
+Rational PlaybackEngine::currentFrameTime() const {
+    std::lock_guard lock(m_displayMutex);
+    return m_current ? m_current->time : Rational();
 }
 
 PlaybackStats PlaybackEngine::stats() const {
@@ -275,8 +303,10 @@ void PlaybackEngine::process(Requests requests) {
         doClose();
         return;
     }
-    if (requests.open) {
-        doOpen(requests.open->first, requests.open->second);
+    if (const auto* file = std::get_if<FileRequest>(&requests.open)) {
+        doOpenFile(*file);
+    } else if (const auto* snapshot = std::get_if<std::shared_ptr<const SequenceSnapshot>>(&requests.open)) {
+        doOpenSequence(*snapshot);
     }
     if (!m_video && !m_audio) {
         return;
@@ -306,6 +336,7 @@ void PlaybackEngine::doClose() {
     m_activeRate = 0;
     m_video.reset();
     m_audio.reset();
+    m_snapshot.reset();
     m_cache->clear();
     clearQueue();
     {
@@ -316,22 +347,23 @@ void PlaybackEngine::doClose() {
     m_duration = Rational();
     m_error.clear();
     m_hwName.clear();
+    m_sequenceMode = false;
     m_open = false;
 }
 
-void PlaybackEngine::doOpen(const std::filesystem::path& path, const model::MediaInfo& info) {
+void PlaybackEngine::doOpenFile(const FileRequest& request) {
     doClose();
     std::string error;
+    Rational decoderRate;
     try {
-        if (info.hasVideo) {
-            media::VideoDecoderOptions options;
-            options.allowHardware = m_options.allowHardware && !info.isStill;
-            options.maxWidth = m_maxWidth;
-            options.maxHeight = m_maxHeight;
-            m_video = std::make_unique<media::VideoDecoder>(path, options);
+        if (request.info.hasVideo) {
+            auto video = std::make_unique<FileVideoSource>(request.path, m_options.allowHardware && !request.info.isStill,
+                                                           m_maxWidth, m_maxHeight);
+            decoderRate = video->frameRate();
+            m_video = std::move(video);
         }
-        if (info.hasAudio && m_device) {
-            m_audio = std::make_unique<media::AudioDecoder>(path, m_device->sampleRate(), m_device->channels());
+        if (request.info.hasAudio && m_device) {
+            m_audio = std::make_unique<FileAudioSource>(request.path, m_device->sampleRate(), m_device->channels());
         }
     } catch (const std::exception& e) {
         error = e.what();
@@ -341,15 +373,16 @@ void PlaybackEngine::doOpen(const std::filesystem::path& path, const model::Medi
     {
         std::lock_guard lock(m_infoMutex);
         m_error = error;
-        Rational rate = info.frameRate.isPositive() ? info.frameRate : Rational(30);
-        if (m_video && m_video->info().frameRate.isPositive()) {
-            rate = m_video->info().frameRate;
+        Rational rate = request.info.frameRate.isPositive() ? request.info.frameRate : Rational(30);
+        if (decoderRate.isPositive()) {
+            rate = decoderRate;
         }
         m_frameRate = rate;
-        m_duration = info.isStill ? Rational() : info.duration;
-        m_hwName = m_video ? media::hwAccelName(m_video->hwAccel()) : "";
+        m_duration = request.info.isStill ? Rational() : request.info.duration;
+        m_hwName = m_video ? m_video->hwAccel() : "";
+        m_sequenceMode = false;
     }
-    m_cacheSource = model::pathToUtf8(path);
+    m_cacheSource = model::pathToUtf8(request.path);
     m_videoEof = false;
     const bool ok = (m_video || m_audio) && error.empty();
     if (ok) {
@@ -359,6 +392,37 @@ void PlaybackEngine::doOpen(const std::filesystem::path& path, const model::Medi
     }
     m_open = ok;
     ++m_openCount;
+}
+
+void PlaybackEngine::doOpenSequence(std::shared_ptr<const SequenceSnapshot> snapshot) {
+    const bool update = m_snapshot && snapshot && m_snapshot->sequence.id == snapshot->sequence.id;
+    const Rational position = update ? m_clock.now() : Rational();
+    const int rate = update ? m_activeRate : 0;
+    if (!update) {
+        doClose();
+    } else {
+        activateAudio(false);
+        clearQueue();
+    }
+    m_snapshot = std::move(snapshot);
+    if (!m_snapshot) {
+        return;
+    }
+    m_video = std::make_unique<SequenceVideoSource>(m_snapshot, m_options.allowHardware, m_maxWidth, m_maxHeight);
+    if (m_device) {
+        m_audio = std::make_unique<SequenceAudioSource>(m_snapshot, m_device->sampleRate(), m_device->channels());
+    }
+    {
+        std::lock_guard lock(m_infoMutex);
+        m_frameRate = m_snapshot->sequence.settings.frameRate;
+        m_duration = m_snapshot->sequence.duration();
+        m_sequenceMode = true;
+        m_error.clear();
+    }
+    m_cacheSource = "sequence:" + m_snapshot->sequence.id.toString() + ":" + std::to_string(m_snapshot->generation);
+    m_open = true;
+    ++m_openCount;
+    applyTransport(rate, position); // redisplays with the new content, keeps playing if playing
 }
 
 void PlaybackEngine::applyTransport(int rate, const Rational& position) {
@@ -376,7 +440,7 @@ void PlaybackEngine::applyTransport(int rate, const Rational& position) {
         return;
     }
     if (rate > 0 && m_video) {
-        m_video->seek(position); // decoding continues from the displayed frame
+        m_video->seek(position); // decoding continues from the displayed picture
     }
     if (rate < 0) {
         m_reverseNext = position;
@@ -393,19 +457,47 @@ void PlaybackEngine::applyTransport(int rate, const Rational& position) {
     }
 }
 
+void PlaybackEngine::cachePut(const TimedFrame& f) {
+    if (f.frame) {
+        m_cache->put({m_cacheSource, m_maxWidth, frameIndexOf(f.time)}, f.frame);
+    }
+}
+
+std::optional<TimedFrame> PlaybackEngine::cacheGet(const Rational& t) {
+    const auto index = frameIndexOf(t);
+    auto frame = m_cache->get({m_cacheSource, m_maxWidth, index});
+    if (!frame) {
+        return std::nullopt;
+    }
+    bool sequence = false;
+    {
+        std::lock_guard lock(m_infoMutex);
+        sequence = m_sequenceMode;
+    }
+    if (!sequence) {
+        return TimedFrame{frame->pts, frame->duration, frame};
+    }
+    const Rational rate = frameRate();
+    return TimedFrame{framesToTime(index, rate), rate.reciprocal(), frame};
+}
+
 void PlaybackEngine::showFrameAt(const Rational& t) {
     if (!m_video) {
         return;
     }
-    const media::FrameKey key{m_cacheSource, m_maxWidth, frameIndexOf(t)};
-    auto frame = m_cache->get(key);
-    if (!frame) {
-        frame = m_video->frameAt(t);
-        m_cache->put(key, frame);
+    auto picture = cacheGet(t);
+    if (!picture) {
+        picture = m_video->frameAt(t);
+        if (picture) {
+            cachePut(*picture);
+        }
     }
-    if (frame) {
-        std::lock_guard lock(m_displayMutex);
-        m_current = frame;
+    std::lock_guard lock(m_displayMutex);
+    if (picture) {
+        m_current = std::move(*picture);
+    } else {
+        // Past the end of a sequence: black at the playhead.
+        m_current = TimedFrame{t, frameRate().reciprocal(), nullptr};
     }
 }
 
@@ -415,11 +507,13 @@ void PlaybackEngine::fillForward() {
     }
     const Rational now = m_clock.now();
     std::size_t queued = 0;
-    Rational lastQueued;
+    Rational lastQueued(-1);
     {
         std::lock_guard lock(m_displayMutex);
         queued = m_queue.size();
-        lastQueued = m_queue.empty() ? Rational(-1) : m_queue.back()->pts;
+        if (!m_queue.empty()) {
+            lastQueued = m_queue.back().time;
+        }
     }
     // Far behind (slow decode, heavy file): jump to the clock instead of decoding through.
     if (!lastQueued.isNegative() && lastQueued + kResyncThreshold < now) {
@@ -428,18 +522,18 @@ void PlaybackEngine::fillForward() {
         ++m_dropped;
     }
     while (queued < static_cast<std::size_t>(m_options.lookAheadFrames)) {
-        auto frame = m_video->nextFrame();
-        if (!frame) {
+        auto picture = m_video->nextFrame();
+        if (!picture) {
             m_videoEof = true;
             return;
         }
-        m_cache->put({m_cacheSource, m_maxWidth, frameIndexOf(frame->pts)}, frame);
-        if (frame->pts + frame->duration <= now) {
+        cachePut(*picture);
+        if (picture->time + picture->duration <= now) {
             ++m_dropped; // already late: never queue it
             continue;
         }
         std::lock_guard lock(m_displayMutex);
-        m_queue.push_back(std::move(frame));
+        m_queue.push_back(std::move(*picture));
         queued = m_queue.size();
     }
 }
@@ -455,15 +549,14 @@ void PlaybackEngine::fillReverse() {
     }
     const Rational frameDur = frameRate().reciprocal();
     while (queued < static_cast<std::size_t>(m_options.lookAheadFrames) && !m_reverseDone) {
-        // Cache first (scrubbing back and forth), otherwise decode the whole run up to the target.
-        const media::FrameKey key{m_cacheSource, m_maxWidth, frameIndexOf(m_reverseNext)};
-        std::vector<media::VideoFramePtr> run;
-        if (auto cached = m_cache->get(key)) {
-            run.push_back(std::move(cached));
+        // Cache first (scrubbing back and forth), otherwise decode a run up to the target.
+        std::vector<TimedFrame> run;
+        if (auto cached = cacheGet(m_reverseNext)) {
+            run.push_back(std::move(*cached));
         } else {
             run = m_video->framesUpTo(m_reverseNext);
             for (const auto& f : run) {
-                m_cache->put({m_cacheSource, m_maxWidth, frameIndexOf(f->pts)}, f);
+                cachePut(f);
             }
         }
         if (run.empty()) {
@@ -472,12 +565,12 @@ void PlaybackEngine::fillReverse() {
         }
         std::lock_guard lock(m_displayMutex);
         for (auto it = run.rbegin(); it != run.rend(); ++it) {
-            if ((*it)->pts <= m_reverseNext) {
+            if (it->time <= m_reverseNext) {
                 m_queue.push_back(*it);
             }
         }
         queued = m_queue.size();
-        m_reverseNext = run.front()->pts - frameDur;
+        m_reverseNext = run.front().time - frameDur;
         if (m_reverseNext.isNegative()) {
             m_reverseDone = true;
         }
@@ -522,12 +615,15 @@ void PlaybackEngine::activateAudio(bool on) {
 }
 
 void PlaybackEngine::checkEnd() {
-    const Rational d = duration();
-    if (!d.isPositive()) {
-        return;
+    Rational d;
+    bool sequence = false;
+    {
+        std::lock_guard lock(m_infoMutex);
+        d = m_duration;
+        sequence = m_sequenceMode;
     }
     const Rational now = m_clock.now();
-    const Rational last = max(Rational(), d - frameRate().reciprocal());
+    const Rational last = sequence ? d : max(Rational(), d - frameRate().reciprocal());
     bool ended = false;
     if (m_activeRate > 0 && now >= d) {
         ended = true;
@@ -535,9 +631,8 @@ void PlaybackEngine::checkEnd() {
         ended = true;
     }
     if (ended) {
-        const Rational stopAt = m_activeRate > 0 ? last : Rational();
         m_requestedRate = 0;
-        applyTransport(0, stopAt);
+        applyTransport(0, m_activeRate > 0 ? last : Rational());
     }
 }
 

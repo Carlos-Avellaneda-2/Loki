@@ -76,6 +76,22 @@ SourceMonitorPanel::SourceMonitorPanel(ProjectController& controller, MediaServi
     m_playButton = button(QStyle::SP_MediaPlay, tr("Play-Stop Toggle (Space)"), &SourceMonitorPanel::togglePlay);
     auto* fwd = button(QStyle::SP_MediaSeekForward, tr("Step Forward (Right)"), [this] { step(1); });
     auto* goOut = button(QStyle::SP_MediaSkipForward, tr("Go to Out (Shift+O)"), &SourceMonitorPanel::goToOut);
+    auto* insertButton = new QToolButton(this);
+    insertButton->setText(tr("Insert"));
+    insertButton->setToolTip(tr("Insert (,)"));
+    connect(insertButton, &QToolButton::clicked, this, [this] {
+        if (m_media) {
+            emit editRequested(m_media, true);
+        }
+    });
+    auto* overwriteButton = new QToolButton(this);
+    overwriteButton->setText(tr("Overwrite"));
+    overwriteButton->setToolTip(tr("Overwrite (.)"));
+    connect(overwriteButton, &QToolButton::clicked, this, [this] {
+        if (m_media) {
+            emit editRequested(m_media, false);
+        }
+    });
 
     auto* info = new QHBoxLayout();
     info->addWidget(m_timecode);
@@ -91,6 +107,9 @@ SourceMonitorPanel::SourceMonitorPanel(ProjectController& controller, MediaServi
                     static_cast<QWidget*>(goOut)}) {
         transport->addWidget(w);
     }
+    transport->addSpacing(16);
+    transport->addWidget(insertButton);
+    transport->addWidget(overwriteButton);
     transport->addStretch();
 
     auto* layout = new QVBoxLayout(this);
@@ -156,6 +175,16 @@ void SourceMonitorPanel::createShortcuts() {
     bind(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_X), [this] { clearInOut(); });
     bind(QKeySequence(Qt::Key_Home), [this] { m_engine->seek(Rational()); });
     bind(QKeySequence(Qt::Key_End), [this] { m_engine->seek(m_engine->duration()); });
+    bind(QKeySequence(Qt::Key_Comma), [this] {
+        if (m_media) {
+            emit editRequested(m_media, true);
+        }
+    });
+    bind(QKeySequence(Qt::Key_Period), [this] {
+        if (m_media) {
+            emit editRequested(m_media, false);
+        }
+    });
 }
 
 const model::MediaItem* SourceMonitorPanel::currentItem() const {

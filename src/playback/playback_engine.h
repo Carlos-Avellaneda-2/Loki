@@ -4,6 +4,7 @@
 #include "media/video_frame.h"
 #include "model/types.h"
 #include "playback/playback_clock.h"
+#include "playback/sources.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -15,11 +16,10 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <variant>
 
 namespace loki::media {
-class AudioDecoder;
 class FrameCache;
-class VideoDecoder;
 } // namespace loki::media
 
 namespace loki::util {
@@ -45,10 +45,10 @@ struct PlaybackStats {
     std::string hwAccel;
 };
 
-// Plays one media file (Source Monitor). All decoding runs on an internal media thread; the UI
-// thread only posts requests and polls currentFrame()/position(), so it never blocks.
-// A/V sync: at 1x the audio device is the master clock; video frames are picked by that clock and
-// late frames are dropped instead of drifting.
+// Plays a media file (Source Monitor) or a sequence snapshot (Program Monitor). All decoding runs
+// on an internal media thread; the UI thread only posts requests and polls currentFrame() and
+// position(), so it never blocks. A/V sync: at 1x the audio device is the master clock; pictures
+// are picked by that clock and late ones are dropped instead of drifting.
 class PlaybackEngine {
 public:
     explicit PlaybackEngine(PlaybackOptions options = {});
@@ -60,9 +60,12 @@ public:
 
     // Asynchronous. `info` comes from the project (probe); errors are reported by lastError().
     void open(const std::filesystem::path& path, const model::MediaInfo& info);
+    // Plays a sequence. Calling it again with a newer snapshot of the same sequence keeps the
+    // position and transport state (live update after edits).
+    void openSequence(std::shared_ptr<const SequenceSnapshot> snapshot);
     void close();
     [[nodiscard]] bool isOpen() const noexcept { return m_open.load(); }
-    // Increments every time an open() completes (successfully or not).
+    // Increments every time an open()/openSequence() completes (successfully or not).
     [[nodiscard]] std::uint64_t openCount() const noexcept { return m_openCount.load(); }
     [[nodiscard]] std::string lastError() const;
 
@@ -84,9 +87,11 @@ public:
     [[nodiscard]] int rate() const noexcept { return m_requestedRate.load(); }
     [[nodiscard]] bool isPlaying() const noexcept { return rate() != 0; }
 
-    // Frame to display now (UI thread, never blocks on decoding). May be null before the first
-    // frame is decoded or for audio-only media.
+    // Pixels to display now (UI thread, never blocks on decoding). Null before the first picture,
+    // for audio-only media, and over gaps of a sequence.
     [[nodiscard]] media::VideoFramePtr currentFrame();
+    // Timeline time of the picture returned by the last currentFrame() call.
+    [[nodiscard]] Rational currentFrameTime() const;
 
     [[nodiscard]] PlaybackStats stats() const;
     [[nodiscard]] bool hasAudioOutput() const noexcept { return m_device != nullptr; }
@@ -95,8 +100,12 @@ public:
     bool waitIdle(int timeoutMs = 5000);
 
 private:
+    struct FileRequest {
+        std::filesystem::path path;
+        model::MediaInfo info;
+    };
     struct Requests {
-        std::optional<std::pair<std::filesystem::path, model::MediaInfo>> open;
+        std::variant<std::monostate, FileRequest, std::shared_ptr<const SequenceSnapshot>> open;
         bool close = false;
         std::optional<Rational> seek;
         std::optional<int> rate;
@@ -105,7 +114,8 @@ private:
 
     void run(const std::stop_token& stop);
     void process(Requests requests);
-    void doOpen(const std::filesystem::path& path, const model::MediaInfo& info);
+    void doOpenFile(const FileRequest& request);
+    void doOpenSequence(std::shared_ptr<const SequenceSnapshot> snapshot);
     void doClose();
     void applyTransport(int rate, const Rational& position);
     void showFrameAt(const Rational& t);
@@ -115,6 +125,8 @@ private:
     void activateAudio(bool on);
     void checkEnd();
     void clearQueue();
+    void cachePut(const TimedFrame& f);
+    [[nodiscard]] std::optional<TimedFrame> cacheGet(const Rational& t);
     [[nodiscard]] Rational clampTime(const Rational& t) const;
     [[nodiscard]] std::int64_t frameIndexOf(const Rational& t) const;
     void audioCallback(float* out, std::size_t frames) noexcept;
@@ -126,8 +138,9 @@ private:
     std::unique_ptr<media::FrameCache> m_cache;
 
     // Media-thread state.
-    std::unique_ptr<media::VideoDecoder> m_video;
-    std::unique_ptr<media::AudioDecoder> m_audio;
+    std::unique_ptr<VideoSource> m_video;
+    std::unique_ptr<AudioSource> m_audio;
+    std::shared_ptr<const SequenceSnapshot> m_snapshot; // set in sequence mode
     std::string m_cacheSource;
     int m_activeRate = 0;
     Rational m_reverseNext;
@@ -144,12 +157,13 @@ private:
     mutable std::mutex m_infoMutex;
     Rational m_duration;
     Rational m_frameRate{30};
+    bool m_sequenceMode = false; // seeks are not clamped to the duration (free playhead)
     std::string m_error;
 
     mutable std::mutex m_displayMutex;
-    std::deque<media::VideoFramePtr> m_queue; // forward: ascending pts; reverse: descending
-    media::VideoFramePtr m_current;
-    media::VideoFramePtr m_lastCounted;
+    std::deque<TimedFrame> m_queue; // forward: ascending time; reverse: descending
+    std::optional<TimedFrame> m_current;
+    std::optional<Rational> m_lastCountedTime;
 
     std::atomic<bool> m_audioActive{false};
     std::atomic<std::uint64_t> m_callbacks{0};

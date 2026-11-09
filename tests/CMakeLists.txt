@@ -42,6 +42,7 @@ loki_add_test_executable(loki_model_tests
 loki_add_test_executable(loki_commands_tests
     SOURCES
         commands/clip_commands_test.cpp
+        commands/edit_commands_test.cpp
         commands/project_commands_test.cpp
         commands/random_edit_test.cpp
         commands/undo_stack_test.cpp
@@ -69,6 +70,7 @@ loki_add_test_executable(loki_media_tests
 loki_add_test_executable(loki_playback_tests
     SOURCES
         playback/playback_test.cpp
+        playback/sequence_source_test.cpp
     LIBS loki_test_support loki::playback loki::render GTest::gtest GTest::gtest_main)
 
 loki_add_test_executable(loki_app_tests
@@ -78,5 +80,6 @@ loki_add_test_executable(loki_app_tests
         ui/project_controller_test.cpp
         ui/project_panel_test.cpp
         ui/source_monitor_test.cpp
+        ui/timeline_test.cpp
         qt_test_main.cpp
     LIBS loki::app loki_test_support Qt6::Test GTest::gtest)

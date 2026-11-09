@@ -237,6 +237,37 @@ sequenceDiagram
   - Teclas: Espacio, J/K/L, ←/→ (Shift = 5 fotogramas), I/O, Shift+I/O, Home/End y Ctrl+Shift+X.
   - Las marcas In/Out se guardan en el `MediaItem` como comandos con undo (D9). Out es exclusivo.
 
+## 7c. Línea de tiempo y edición (Fase 5)
+
+- **Ediciones como diferencias.** `commands::EditPlan` trabaja sobre una copia de las pistas afectadas:
+  - Operaciones: `clearRange`, `splitAt`, `shiftFrom`, `add`, `take`.
+  - `build()` valida la copia (sin solapes, sin pistas bloqueadas) y genera un único `ReplaceClipsCommand`
+    atómico: quita los clips "antes" y pone los "después", con rollback si algo falla.
+  - Con esto se implementan sobrescribir, insertar (desplaza todas las pistas desbloqueadas), cuchilla
+    (también en todas las pistas), mover (sobrescribe el destino, como Premiere), recortar (limitado por el
+    medio, los vecinos y un mínimo de 1 fotograma) y borrar.
+  - Los clips vinculados (`LinkId`) se mueven, recortan y cortan juntos. Al cortar, las mitades derechas
+    comparten un `LinkId` nuevo.
+- **Fuentes de reproducción.** `playback::VideoSource`/`AudioSource` con dos implementaciones:
+  - Archivo: el Monitor de Origen.
+  - Secuencia: `SequenceSnapshot` inmutable (secuencia + medios + generación). En la Fase 5 el video muestra el
+    clip visible de la pista más alta y el audio suma las pistas no silenciadas. La Fase 6 añade la composición
+    y la Fase 8 el mezclador.
+- **Monitor de Programa.** Es dueño del cabezal de la secuencia. Tras cada edición publica un snapshot nuevo
+  (agrupado en un turno del event loop). El motor conserva la posición y el estado de reproducción. El cabezal
+  puede pasar del final de la secuencia (se ve negro).
+- **`TimelineView`.** Cabeceras, regla y clips en un solo widget.
+  - Solo se pinta el rango visible. Las miniaturas y formas de onda salen de `MediaServices`.
+  - Al arrastrar se muestra una "sombra" y la edición se aplica al soltar: un gesto es un solo undo y un
+    arrastre cancelado no cambia nada.
+  - Snapping a bordes de clip, al cabezal y a 0.
+  - Herramientas: Selección (V) y Cuchilla (C; Shift = todas las pistas).
+  - Teclas: Ctrl+K / Ctrl+Shift+K (cortar en el cabezal), Supr, +/−/\ (zoom), ↑/↓ (punto de edición).
+  - Al soltar un medio desde Project se sobrescribe; con Ctrl, se inserta.
+  - En la cabecera de pista: destino (patching), bloquear y ojo/silencio.
+- **Monitor de Origen.** `,` inserta y `.` sobrescribe en el cabezal del Programa, usando las pistas destino.
+  Después de la edición el cabezal salta al final del clip.
+
 ## 8. Export
 
 - Mismo grafo que playback, reloj "offline" (frame a frame), sumidero = encoder.

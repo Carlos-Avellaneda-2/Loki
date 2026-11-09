@@ -17,6 +17,10 @@ class MediaServices;
 class ProjectController;
 class ProjectPanel;
 class SourceMonitorPanel;
+class ProgramMonitorPanel;
+namespace timeline {
+class TimelinePanel;
+} // namespace timeline
 } // namespace loki::ui
 
 namespace ads {
@@ -59,6 +63,11 @@ public:
     [[nodiscard]] ui::MediaServices* mediaServices() const noexcept { return m_services; }
     [[nodiscard]] ui::ProjectPanel* projectPanel() const noexcept { return m_projectPanel; }
     [[nodiscard]] ui::SourceMonitorPanel* sourceMonitor() const noexcept { return m_sourceMonitor; }
+    [[nodiscard]] ui::ProgramMonitorPanel* programMonitor() const noexcept { return m_programMonitor; }
+    [[nodiscard]] ui::timeline::TimelinePanel* timeline() const noexcept { return m_timeline; }
+    [[nodiscard]] model::SequenceId activeSequence() const noexcept { return m_activeSequence; }
+    // Insert/Overwrite from the Source Monitor at the Program playhead (public for tests).
+    void sourceEdit(model::MediaId media, bool insert);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -67,6 +76,7 @@ private:
     void createDockWidgets();
     void createMenus();
     QWidget* createPanelWidget(ui::PanelId id);
+    void activateFirstSequence();
     void updateTitle();
     void openProject();
     bool save();
@@ -79,6 +89,9 @@ private:
     ui::MediaServices* m_services = nullptr;       // owned by this window (Qt parent)
     ui::ProjectPanel* m_projectPanel = nullptr;    // owned by its dock widget
     ui::SourceMonitorPanel* m_sourceMonitor = nullptr; // owned by its dock widget
+    ui::ProgramMonitorPanel* m_programMonitor = nullptr; // owned by its dock widget
+    ui::timeline::TimelinePanel* m_timeline = nullptr;  // owned by its dock widget
+    model::SequenceId m_activeSequence;
     playback::PlaybackOptions m_playbackOptions;
     ads::CDockManager* m_dockManager = nullptr;    // owned by this window (Qt parent)
     std::array<ads::CDockWidget*, ui::kAllPanels.size()> m_docks{};

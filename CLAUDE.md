@@ -40,6 +40,8 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
   (solo accesible desde `Command::mutate()` y `ProjectBuilder`). UI ejecuta vía `ProjectController::execute()`.
 - Arrastres/sliders: pedir `ProjectController::newGestureId()` y pasarlo a MoveClip/trimClip/setParameterValue
   para fundir en un solo undo. GestureId 0 = nunca fundir.
+- Ediciones de timeline: construir con `commands::EditPlan` (copia de pistas → diff → un `ReplaceClipsCommand`);
+  no encadenar comandos sueltos. Drags del timeline: sombra + commit al soltar.
 - Keyframes en tiempo del *source* del clip. IDs = UUID (`model::Id<Tag>` tipado).
 - Cambio de esquema `.loki`: subir `kProjectFormatVersion` + migración + golden en `tests/data/`.
 - RAII; sin `new`/`delete` crudos; sin globales mutables; FFmpeg en `unique_ptr` con deleter.
@@ -81,7 +83,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 2. Modelo y comandos — Rational/timecode/UUID, modelo puro, Commands+UndoStack, JSON v1, ProjectController, 139 tests (ASan OK)
 - [x] 3. Medios — probe, decoders (hwaccel+fallback), FrameCache, MediaCache, thumbnails, waveforms, Project panel
 - [x] 4. Reproducción — PlaybackClock (audio master), PlaybackEngine, J/K/L, scrub, Source Monitor GL
-- [ ] 5. Línea de tiempo + Monitor de Programa
+- [x] 5. Línea de tiempo + Monitor de Programa — EditPlan/ReplaceClipsCommand (insert/overwrite/razor/move/trim/delete), sources de playback (archivo/secuencia), TimelineView, Program Monitor, 251 tests
 - [ ] 6. Composición GPU y efectos
 - [ ] 7. Edición avanzada
 - [ ] 8. Audio

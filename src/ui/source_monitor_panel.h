@@ -53,6 +53,10 @@ public:
     void tick();
     [[nodiscard]] QString timecodeText() const;
 
+signals:
+    // Insert (",") or Overwrite (".") the marked range into the active sequence at its playhead.
+    void editRequested(loki::model::MediaId media, bool insert);
+
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;

@@ -4,6 +4,8 @@ add_library(loki_commands STATIC
     clip_commands.cpp
     command.h
     command.cpp
+    edit_commands.h
+    edit_commands.cpp
     project_commands.h
     project_commands.cpp
     undo_stack.h
