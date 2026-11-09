@@ -17,6 +17,7 @@ namespace loki::ui {
 
 class ProjectController;
 class ScrubBar;
+class ShortcutManager;
 class VideoView;
 
 // Program Monitor: plays the active sequence. It owns the sequence playhead (the timeline reads
@@ -35,6 +36,7 @@ public:
     ProgramMonitorPanel(ProgramMonitorPanel&&) = delete;
     ProgramMonitorPanel& operator=(ProgramMonitorPanel&&) = delete;
 
+    void registerShortcuts(ShortcutManager& shortcuts);
     void setSequence(model::SequenceId id);
     [[nodiscard]] model::SequenceId sequenceId() const noexcept { return m_sequence; }
     [[nodiscard]] playback::PlaybackEngine& engine() noexcept { return *m_engine; }
@@ -47,7 +49,6 @@ public:
 
 private:
     void schedulePublish();
-    void createShortcuts();
     void onQualityChanged(int index);
 
     ProjectController& m_controller;

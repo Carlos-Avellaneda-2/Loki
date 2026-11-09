@@ -4,11 +4,18 @@
 
 #include <QWidget>
 
+#include <utility>
+#include <vector>
+
 class QLabel;
 class QScrollBar;
 class QSlider;
 class QTimer;
 class QToolButton;
+
+namespace loki::ui {
+class ShortcutManager;
+} // namespace loki::ui
 
 namespace loki::ui::timeline {
 
@@ -22,6 +29,8 @@ public:
     [[nodiscard]] TimelineView* view() const noexcept { return m_view; }
     void setSequence(model::SequenceId id);
     void setTransport(Transport transport);
+    // Creates the timeline's keyboard actions (Premiere defaults, user-configurable).
+    void registerShortcuts(ShortcutManager& shortcuts);
 
 signals:
     void statusMessage(const QString& text);
@@ -31,8 +40,7 @@ private:
 
     TimelineView* m_view = nullptr;
     QLabel* m_title = nullptr;
-    QToolButton* m_selectTool = nullptr;
-    QToolButton* m_razorTool = nullptr;
+    std::vector<std::pair<Tool, QToolButton*>> m_toolButtons;
     QToolButton* m_snap = nullptr;
     QSlider* m_zoom = nullptr;
     QScrollBar* m_hScroll = nullptr;

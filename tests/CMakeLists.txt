@@ -41,6 +41,7 @@ loki_add_test_executable(loki_model_tests
 
 loki_add_test_executable(loki_commands_tests
     SOURCES
+        commands/advanced_edit_test.cpp
         commands/clip_commands_test.cpp
         commands/edit_commands_test.cpp
         commands/effect_commands_test.cpp
@@ -82,6 +83,7 @@ loki_add_test_executable(loki_app_tests
         ui/project_panel_test.cpp
         ui/effect_controls_test.cpp
         ui/source_monitor_test.cpp
+        ui/shortcuts_test.cpp
         ui/timeline_test.cpp
         qt_test_main.cpp
     LIBS loki::app loki_test_support Qt6::Test GTest::gtest)

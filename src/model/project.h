@@ -4,6 +4,7 @@
 #include "model/types.h"
 
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -147,6 +148,7 @@ public:
     Sequence removeSequence(SequenceId id, std::size_t* indexOut = nullptr);
     void setSequenceName(SequenceId id, std::string name);
     void setSequenceSettings(SequenceId id, SequenceSettings settings);
+    void setSequenceMarks(SequenceId id, std::optional<Rational> in, std::optional<Rational> out);
 
     // Tracks
     void insertTrack(SequenceId sequence, std::size_t index, Track track);

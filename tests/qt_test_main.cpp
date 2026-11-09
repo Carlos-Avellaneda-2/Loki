@@ -10,6 +10,9 @@ int main(int argc, char* argv[]) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
     QApplication app(argc, argv);
+    // Isolated settings: tests never touch the user's real Loki preferences.
+    QApplication::setOrganizationName(QStringLiteral("LokiTests"));
+    QApplication::setApplicationName(QStringLiteral("loki_tests"));
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

@@ -152,4 +152,47 @@ enum class ClipEdge { In, Out };
                                                        const std::vector<model::ClipId>& clips,
                                                        bool includeLinked = true);
 
+// --- Phase 7: advanced edits -----------------------------------------------------------------
+
+// Ripple trim (B): trims an edge like makeTrimEdge but the clips after the edit move to keep
+// everything butted (every unlocked track shifts). The trimmed clip keeps its start.
+[[nodiscard]] std::unique_ptr<Command> makeRippleTrim(const model::Project& project, model::SequenceId sequence,
+                                                      model::ClipId clip, ClipEdge edge, const Rational& delta,
+                                                      bool includeLinked = true);
+
+// Rolling edit (N): moves the edit point between `clip` and its adjacent neighbour on that edge
+// (out of the left clip and in of the right one change together; total duration unchanged).
+[[nodiscard]] std::unique_ptr<Command> makeRollEdit(const model::Project& project, model::SequenceId sequence,
+                                                    model::ClipId clip, ClipEdge edge, const Rational& delta,
+                                                    bool includeLinked = true);
+
+// Slip (Y): changes which part of the source the clip shows; position and duration stay.
+// Positive `delta` shows later source content.
+[[nodiscard]] std::unique_ptr<Command> makeSlipEdit(const model::Project& project, model::SequenceId sequence,
+                                                    model::ClipId clip, const Rational& delta,
+                                                    bool includeLinked = true);
+
+// Slide (U): moves the clip in time keeping its content; the adjacent neighbours absorb the move
+// (left one extends/shortens its out, right one its in). Without a neighbour the gap absorbs it.
+[[nodiscard]] std::unique_ptr<Command> makeSlideEdit(const model::Project& project, model::SequenceId sequence,
+                                                     model::ClipId clip, const Rational& delta,
+                                                     bool includeLinked = true);
+
+// Ripple delete: deletes the clips (with linked partners) and closes the gap on every unlocked
+// track whose range is free after the deletion (D14).
+[[nodiscard]] std::unique_ptr<Command> makeRippleDelete(const model::Project& project, model::SequenceId sequence,
+                                                        const std::vector<model::ClipId>& clips);
+
+// Lift removes [in, out) on every unlocked track leaving a gap; Extract also closes it.
+[[nodiscard]] std::unique_ptr<Command> makeLiftRange(const model::Project& project, model::SequenceId sequence,
+                                                     const Rational& in, const Rational& out);
+[[nodiscard]] std::unique_ptr<Command> makeExtractRange(const model::Project& project, model::SequenceId sequence,
+                                                        const Rational& in, const Rational& out);
+
+// Link clips into one A/V group (they move, trim and cut together) / remove their links.
+[[nodiscard]] std::unique_ptr<Command> makeLinkClips(const model::Project& project, model::SequenceId sequence,
+                                                     const std::vector<model::ClipId>& clips);
+[[nodiscard]] std::unique_ptr<Command> makeUnlinkClips(const model::Project& project, model::SequenceId sequence,
+                                                       const std::vector<model::ClipId>& clips);
+
 } // namespace loki::commands

@@ -290,6 +290,29 @@ sequenceDiagram
   - Las ediciones usan `commands::setEffectParameter` y relacionados. Mientras se anima, un cambio de valor crea
     un keyframe en el cabezal (tiempo del origen del clip).
 
+## 7e. Edición avanzada y atajos (Fase 7, D13–D14)
+
+- Nuevas ediciones en `commands/edit_commands`, todas construidas con `EditPlan` (un solo
+  `ReplaceClipsCommand`, atómico y deshacible):
+  - `makeRippleTrim` (B): recorta un borde y desplaza lo posterior en todas las pistas sin bloquear.
+  - `makeRollEdit` (N): mueve el punto de edición entre dos clips vecinos; la duración total no cambia.
+  - `makeSlipEdit` (Y): cambia el rango del origen; posición y duración quedan iguales.
+  - `makeSlideEdit` (U): mueve el clip; los vecinos absorben el cambio (o el hueco, si no hay vecino).
+  - `makeRippleDelete`: borra y cierra el hueco solo en pistas con ese tramo libre (D14).
+  - `makeLiftRange` / `makeExtractRange`: quitan `[In, Out)` de las pistas sin bloquear; Extract cierra el hueco.
+  - `makeLinkClips` / `makeUnlinkClips`.
+  - Los límites (medio, vecinos, mínimo de un fotograma) se aplican recortando el delta, no fallando.
+- Marcas In/Out de secuencia: campos opcionales `markIn`/`markOut` (D13). `SetSequenceMarksCommand` y las
+  ayudas `setSequenceMarkIn/Out`: una In pasada la Out borra la Out, y al revés.
+  `ui::sequence_edits` las comparte entre Timeline y Monitor de Programa.
+- Atajos: `ui::ShortcutManager` es el registro central.
+  - Cada comando es un `QAction` con id estable (`timeline.*`, `source.*`, `program.*`, `app.*`), un contexto
+    (panel o "Application") y una tecla por defecto estilo Premiere.
+  - El contexto de panel usa `Qt::WidgetWithChildrenShortcut`: la misma tecla puede valer distinto por panel.
+  - Los cambios del usuario se guardan en `QSettings` (`shortcuts/<id>`); solo se guardan las diferencias.
+  - `conflicts()` detecta teclas repetidas en un mismo contexto o contra un atajo global.
+  - Edición > Atajos de teclado (`app::ShortcutsDialog`) no deja aplicar si hay conflictos.
+
 ## 8. Export
 
 - Mismo grafo que playback, reloj "offline" (frame a frame), sumidero = encoder.

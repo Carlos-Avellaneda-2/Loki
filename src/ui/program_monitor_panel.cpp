@@ -2,17 +2,20 @@
 
 #include "ui/project_controller.h"
 #include "ui/scrub_bar.h"
+#include "ui/sequence_edits.h"
+#include "ui/shortcut_manager.h"
 #include "ui/video_view.h"
 #include "util/timecode.h"
 
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QShortcut>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+
+#include <functional>
 
 namespace loki::ui {
 
@@ -98,7 +101,6 @@ ProgramMonitorPanel::ProgramMonitorPanel(ProjectController& controller, playback
         }
     });
 
-    createShortcuts();
     m_timer = new QTimer(this);
     m_timer->setTimerType(Qt::PreciseTimer);
     m_timer->setInterval(10);
@@ -108,22 +110,41 @@ ProgramMonitorPanel::ProgramMonitorPanel(ProjectController& controller, playback
 
 ProgramMonitorPanel::~ProgramMonitorPanel() = default;
 
-void ProgramMonitorPanel::createShortcuts() {
-    const auto bind = [this](const QKeySequence& key, auto slot) {
-        auto* s = new QShortcut(key, this);
-        s->setContext(Qt::WidgetWithChildrenShortcut);
-        connect(s, &QShortcut::activated, this, slot);
+void ProgramMonitorPanel::registerShortcuts(ShortcutManager& s) {
+    const QString ctx = QStringLiteral("Program Monitor");
+    const auto add = [&](const char* id, const QString& text, const QKeySequence& key, std::function<void()> fn) {
+        s.create(this, QStringLiteral("program.") + QLatin1String(id), ctx, text, key, std::move(fn));
     };
-    bind(QKeySequence(Qt::Key_Space), [this] { m_engine->togglePlay(); });
-    bind(QKeySequence(Qt::Key_L), [this] { m_engine->shuttle(playback::ShuttleKey::L); });
-    bind(QKeySequence(Qt::Key_K), [this] { m_engine->shuttle(playback::ShuttleKey::K); });
-    bind(QKeySequence(Qt::Key_J), [this] { m_engine->shuttle(playback::ShuttleKey::J); });
-    bind(QKeySequence(Qt::Key_Left), [this] { m_engine->stepFrames(-1); });
-    bind(QKeySequence(Qt::Key_Right), [this] { m_engine->stepFrames(1); });
-    bind(QKeySequence(Qt::SHIFT | Qt::Key_Left), [this] { m_engine->stepFrames(-5); });
-    bind(QKeySequence(Qt::SHIFT | Qt::Key_Right), [this] { m_engine->stepFrames(5); });
-    bind(QKeySequence(Qt::Key_Home), [this] { m_engine->seek(Rational()); });
-    bind(QKeySequence(Qt::Key_End), [this] { m_engine->seek(m_engine->duration()); });
+    auto& e = *m_engine;
+    add("play", tr("Play-Stop Toggle"), QKeySequence(Qt::Key_Space), [&e] { e.togglePlay(); });
+    add("shuttleRight", tr("Shuttle Right"), QKeySequence(Qt::Key_L), [&e] { e.shuttle(playback::ShuttleKey::L); });
+    add("shuttleStop", tr("Shuttle Stop"), QKeySequence(Qt::Key_K), [&e] { e.shuttle(playback::ShuttleKey::K); });
+    add("shuttleLeft", tr("Shuttle Left"), QKeySequence(Qt::Key_J), [&e] { e.shuttle(playback::ShuttleKey::J); });
+    add("stepBack", tr("Step Back 1 Frame"), QKeySequence(Qt::Key_Left), [&e] { e.stepFrames(-1); });
+    add("stepForward", tr("Step Forward 1 Frame"), QKeySequence(Qt::Key_Right), [&e] { e.stepFrames(1); });
+    add("stepBack5", tr("Step Back 5 Frames"), QKeySequence(Qt::SHIFT | Qt::Key_Left), [&e] { e.stepFrames(-5); });
+    add("stepForward5", tr("Step Forward 5 Frames"), QKeySequence(Qt::SHIFT | Qt::Key_Right), [&e] { e.stepFrames(5); });
+    add("start", tr("Go to Start"), QKeySequence(Qt::Key_Home), [&e] { e.seek(Rational()); });
+    add("end", tr("Go to End"), QKeySequence(Qt::Key_End), [&e] { e.seek(e.duration()); });
+    add("markIn", tr("Mark In"), QKeySequence(Qt::Key_I),
+        [this] { sequence_edits::markIn(m_controller, m_sequence, m_engine->position()); });
+    add("markOut", tr("Mark Out"), QKeySequence(Qt::Key_O),
+        [this] { sequence_edits::markOut(m_controller, m_sequence, m_engine->position()); });
+    add("goToIn", tr("Go to In"), QKeySequence(Qt::SHIFT | Qt::Key_I), [this] {
+        if (const auto in = sequence_edits::markInOf(m_controller, m_sequence)) {
+            m_engine->seek(*in);
+        }
+    });
+    add("goToOut", tr("Go to Out"), QKeySequence(Qt::SHIFT | Qt::Key_O), [this] {
+        if (const auto out = sequence_edits::markOutFrameOf(m_controller, m_sequence)) {
+            m_engine->seek(*out);
+        }
+    });
+    add("clearMarks", tr("Clear In and Out"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_X),
+        [this] { sequence_edits::clearMarks(m_controller, m_sequence); });
+    add("lift", tr("Lift"), QKeySequence(Qt::Key_Semicolon), [this] { sequence_edits::lift(m_controller, m_sequence); });
+    add("extract", tr("Extract"), QKeySequence(Qt::Key_Apostrophe),
+        [this] { sequence_edits::extract(m_controller, m_sequence); });
 }
 
 void ProgramMonitorPanel::setSequence(model::SequenceId id) {
@@ -181,6 +202,7 @@ void ProgramMonitorPanel::publishSnapshot() {
     snapshot->generation = ++m_generation;
     m_title->setText(qs(seq->name));
     m_scrub->setTiming(seq->duration(), seq->settings.frameRate);
+    m_scrub->setMarks(seq->markIn, seq->markOut);
     m_durationLabel->setText(timecode(seq->duration(), seq->settings.frameRate));
     m_engine->openSequence(std::move(snapshot));
 }

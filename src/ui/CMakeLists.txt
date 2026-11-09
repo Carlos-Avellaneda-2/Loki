@@ -17,6 +17,10 @@ add_library(loki_ui STATIC
     project_panel.h
     project_panel.cpp
     scrub_bar.h
+    sequence_edits.h
+    sequence_edits.cpp
+    shortcut_manager.h
+    shortcut_manager.cpp
     scrub_bar.cpp
     source_monitor_panel.h
     source_monitor_panel.cpp

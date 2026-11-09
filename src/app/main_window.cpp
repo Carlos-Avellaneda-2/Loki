@@ -3,6 +3,8 @@
 #include "model/project_json.h"
 #include "ui/panel_factory.h"
 #include "app/preferences_dialog.h"
+#include "app/shortcuts_dialog.h"
+#include "ui/shortcut_manager.h"
 #include "ui/media_services.h"
 #include "ui/project_controller.h"
 #include "ui/project_panel.h"
@@ -52,6 +54,7 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
     resize(1280, 720);
     m_controller = new ui::ProjectController(this);
     m_services = new ui::MediaServices(*m_controller, ui::configuredCacheDirectory(), this);
+    m_shortcuts = new ui::ShortcutManager(this);
     connect(m_controller, &ui::ProjectController::modifiedChanged, this, &MainWindow::updateTitle);
     connect(m_controller, &ui::ProjectController::filePathChanged, this, &MainWindow::updateTitle);
     connect(m_controller, &ui::ProjectController::commandFailed, this,
@@ -86,6 +89,9 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
         dockWidget(ui::PanelId::SourceMonitor)->raise();
     });
     m_timeline->setTransport(m_programMonitor->transport());
+    m_timeline->registerShortcuts(*m_shortcuts);
+    m_sourceMonitor->registerShortcuts(*m_shortcuts);
+    m_programMonitor->registerShortcuts(*m_shortcuts);
     m_effectControls->setPlayhead({[this] { return m_programMonitor->engine().position(); },
                                    [this](const Rational& t) { m_programMonitor->engine().seek(t); }});
     connect(m_timeline->view(), &ui::timeline::TimelineView::selectionChanged, this, [this] {
@@ -228,25 +234,25 @@ QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
 void MainWindow::createMenus() {
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
     auto* newAction = fileMenu->addAction(tr("&New Project"));
-    newAction->setShortcut(QKeySequence::New);
+    m_shortcuts->bind(newAction, QStringLiteral("app.new"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_N));
     connect(newAction, &QAction::triggered, this, [this] {
         if (maybeSave()) {
             m_controller->newProject();
         }
     });
     auto* openAction = fileMenu->addAction(tr("&Open Project..."));
-    openAction->setShortcut(QKeySequence::Open);
+    m_shortcuts->bind(openAction, QStringLiteral("app.open"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext), QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openProject);
     fileMenu->addSeparator();
     auto* saveAction = fileMenu->addAction(tr("&Save"));
-    saveAction->setShortcut(QKeySequence::Save);
+    m_shortcuts->bind(saveAction, QStringLiteral("app.save"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext), QKeySequence::Save);
     connect(saveAction, &QAction::triggered, this, &MainWindow::save);
     auto* saveAsAction = fileMenu->addAction(tr("Save &As..."));
-    saveAsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));
+    m_shortcuts->bind(saveAsAction, QStringLiteral("app.saveAs"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));
     connect(saveAsAction, &QAction::triggered, this, &MainWindow::saveAs);
     fileMenu->addSeparator();
     auto* quitAction = fileMenu->addAction(tr("E&xit"));
-    quitAction->setShortcut(QKeySequence::Quit);
+    m_shortcuts->bind(quitAction, QStringLiteral("app.quit"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext), QKeySequence(Qt::CTRL | Qt::Key_Q));
     quitAction->setMenuRole(QAction::QuitRole);
     connect(quitAction, &QAction::triggered, this, &QWidget::close);
 
@@ -256,7 +262,17 @@ void MainWindow::createMenus() {
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
     editMenu->addAction(m_controller->undoAction());
     editMenu->addAction(m_controller->redoAction());
+    m_shortcuts->bind(m_controller->undoAction(), QStringLiteral("app.undo"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext), QKeySequence(Qt::CTRL | Qt::Key_Z));
+    m_shortcuts->bind(m_controller->redoAction(), QStringLiteral("app.redo"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext),
+                      QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z));
+    m_shortcuts->bind(m_projectPanel->importAction(), QStringLiteral("project.import"), QStringLiteral("Project"),
+                      QKeySequence(Qt::CTRL | Qt::Key_I));
     editMenu->addSeparator();
+    auto* keyboard = editMenu->addAction(tr("&Keyboard Shortcuts..."));
+    connect(keyboard, &QAction::triggered, this, [this] {
+        ShortcutsDialog dialog(*m_shortcuts, this);
+        dialog.exec();
+    });
     auto* preferences = editMenu->addAction(tr("&Preferences..."));
     preferences->setMenuRole(QAction::PreferencesRole);
     connect(preferences, &QAction::triggered, this, [this] {

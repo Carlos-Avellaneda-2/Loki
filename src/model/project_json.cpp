@@ -384,6 +384,12 @@ private:
         for (std::size_t i = 0; i < audio.size(); ++i) {
             s.audioTracks.push_back(readTrack(audio[i], TrackKind::Audio, at + "/audioTracks/" + std::to_string(i)));
         }
+        if (j.contains("markIn")) {
+            s.markIn = rational(j, "markIn", at);
+        }
+        if (j.contains("markOut")) {
+            s.markOut = rational(j, "markOut", at);
+        }
         return s;
     }
 
@@ -429,7 +435,7 @@ json toJson(const Project& project, const std::filesystem::path& projectFile) {
         for (const auto& t : s.audioTracks) {
             audio.push_back(trackToJson(t));
         }
-        sequences.push_back({{"id", idToJson(s.id)},
+        json seqJson = {{"id", idToJson(s.id)},
                              {"name", s.name},
                              {"settings",
                               {{"width", s.settings.width},
@@ -437,7 +443,14 @@ json toJson(const Project& project, const std::filesystem::path& projectFile) {
                                {"frameRate", rationalToJson(s.settings.frameRate)},
                                {"sampleRate", s.settings.sampleRate}}},
                              {"videoTracks", std::move(video)},
-                             {"audioTracks", std::move(audio)}});
+                             {"audioTracks", std::move(audio)}};
+        if (s.markIn) {
+            seqJson["markIn"] = rationalToJson(*s.markIn);
+        }
+        if (s.markOut) {
+            seqJson["markOut"] = rationalToJson(*s.markOut);
+        }
+        sequences.push_back(std::move(seqJson));
     }
     return {{"format", kProjectFormatName},
             {"version", kProjectFormatVersion},

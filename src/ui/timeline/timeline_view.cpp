@@ -4,12 +4,14 @@
 #include "ui/media_services.h"
 #include "ui/project_controller.h"
 #include "ui/project_item_model.h"
+#include "ui/sequence_edits.h"
 #include "util/timecode.h"
 
 #include <QContextMenuEvent>
 #include <QDragEnterEvent>
 #include <QMenu>
 #include <QMimeData>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QWheelEvent>
@@ -240,6 +242,11 @@ void TimelineView::paintEvent(QPaintEvent*) {
         p.drawLine(kHeaderWidth, row.top + row.height - 1, width(), row.top + row.height - 1);
     }
     paintGhosts(p, rowList);
+    if (seq->markIn || seq->markOut) {
+        const double x0 = kHeaderWidth + timeToX(seq->markIn.value_or(Rational()), m_metrics);
+        const double x1 = kHeaderWidth + timeToX(seq->markOut.value_or(seq->duration()), m_metrics);
+        p.fillRect(QRectF(x0, content.top(), std::max(1.0, x1 - x0), content.height()), QColor(0x2d, 0x8c, 0xeb, 28));
+    }
     if (m_snapIndicator) {
         const double x = kHeaderWidth + timeToX(*m_snapIndicator, m_metrics);
         p.setPen(QPen(QColor(0xff, 0xd0, 0x40), 1, Qt::DashLine));
@@ -249,6 +256,14 @@ void TimelineView::paintEvent(QPaintEvent*) {
 
     paintHeaders(p, rowList);
     paintRuler(p, QRect(kHeaderWidth, 0, width() - kHeaderWidth, m_metrics.rulerHeight));
+    if (seq->markIn || seq->markOut) {
+        // In/Out band on the ruler.
+        const double x0 = std::max<double>(kHeaderWidth, kHeaderWidth + timeToX(seq->markIn.value_or(Rational()), m_metrics));
+        const double x1 = kHeaderWidth + timeToX(seq->markOut.value_or(seq->duration()), m_metrics);
+        if (x1 > x0) {
+            p.fillRect(QRectF(x0, m_metrics.rulerHeight - 6, x1 - x0, 5), QColor(0x2d, 0x8c, 0xeb, 160));
+        }
+    }
 
     // Header corner: playhead timecode.
     const QRect corner(0, 0, kHeaderWidth, m_metrics.rulerHeight);
@@ -354,7 +369,8 @@ void TimelineView::paintTrackClips(QPainter& p, const TrackRow& row, const model
         const double x0 = kHeaderWidth + timeToX(clip.start, m_metrics);
         const double x1 = kHeaderWidth + timeToX(clip.end(), m_metrics);
         const QRectF r(x0, row.top + 2, std::max(1.0, x1 - x0 - 1), row.height - 5);
-        const bool dragging = (m_drag == Drag::Move || m_drag == Drag::TrimIn || m_drag == Drag::TrimOut) &&
+        const bool dragging = (m_drag == Drag::Move || m_drag == Drag::Slide || m_drag == Drag::TrimIn ||
+                               m_drag == Drag::TrimOut) &&
                               m_selection.contains(clip.id);
         paintClip(p, r, clip, track.kind, m_selection.contains(clip.id));
         if (dragging) {
@@ -454,7 +470,7 @@ void TimelineView::paintGhosts(QPainter& p, const std::vector<TrackRow>& rowList
     }
     p.setPen(QPen(Qt::white, 1, Qt::DashLine));
     p.setBrush(QColor(255, 255, 255, 40));
-    if (m_drag == Drag::Move || m_drag == Drag::TrimIn || m_drag == Drag::TrimOut) {
+    if (m_drag == Drag::Move || m_drag == Drag::Slide || m_drag == Drag::TrimIn || m_drag == Drag::TrimOut) {
         for (const auto& row : rowList) {
             const auto* track = trackOf(row);
             for (const auto& clip : track->clips) {
@@ -464,7 +480,10 @@ void TimelineView::paintGhosts(QPainter& p, const std::vector<TrackRow>& rowList
                 Rational start = clip.start;
                 Rational end = clip.end();
                 const TrackRow* dest = &row;
-                if (m_drag == Drag::Move) {
+                if (m_drag == Drag::Slide) {
+                    start += m_dragDelta;
+                    end += m_dragDelta;
+                } else if (m_drag == Drag::Move) {
                     start += m_dragDelta;
                     end += m_dragDelta;
                     if (row.kind == m_dragKind && m_dragTrackDelta != 0) {
@@ -593,9 +612,25 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
     if (!hit.clip) {
         if (!event->modifiers().testFlag(Qt::ControlModifier)) {
             m_selection.clear();
-        emit selectionChanged();
+            emit selectionChanged();
             update();
         }
+        return;
+    }
+    if (m_tool == Tool::Slip || m_tool == Tool::Slide) {
+        selectWithLinked(hit.clip, false, false);
+        m_drag = m_tool == Tool::Slip ? Drag::Slip : Drag::Slide;
+        m_dragStart = pos;
+        m_dragClip = hit.clip;
+        m_dragKind = row->kind;
+        m_dragRowIndex = row->index;
+        m_dragDelta = Rational();
+        m_dragTrackDelta = 0;
+        m_dragLinked = !event->modifiers().testFlag(Qt::AltModifier);
+        return;
+    }
+    if ((m_tool == Tool::Ripple || m_tool == Tool::Roll) && hit.zone == HitZone::Body) {
+        selectWithLinked(hit.clip, false, false);
         return;
     }
     const bool toggle = event->modifiers().testFlag(Qt::ControlModifier);
@@ -686,6 +721,16 @@ void TimelineView::mouseMoveEvent(QMouseEvent* event) {
         update();
         return;
     }
+    case Drag::Slip:
+    case Drag::Slide: {
+        m_dragDelta = timeAt(pos.x()) - timeAt(m_dragStart.x());
+        if (m_drag == Drag::Slip) {
+            const auto rate = frameRate();
+            emit statusMessage(tr("Slip %1 frames").arg(-timeToFrames(m_dragDelta, rate, Rounding::Nearest)));
+        }
+        update();
+        return;
+    }
     case Drag::TrimIn:
     case Drag::TrimOut: {
         const auto ref = m_controller.project().findClip(m_dragClip);
@@ -734,7 +779,20 @@ void TimelineView::mouseReleaseEvent(QMouseEvent* event) {
     } else if ((drag == Drag::TrimIn || drag == Drag::TrimOut) && !m_dragDelta.isZero()) {
         const auto edge = drag == Drag::TrimIn ? commands::ClipEdge::In : commands::ClipEdge::Out;
         const auto dt = m_dragDelta;
-        runEdit([&] { return commands::makeTrimEdge(project, m_sequence, m_dragClip, edge, dt, m_dragLinked); });
+        runEdit([&] {
+            switch (m_tool) {
+            case Tool::Ripple: return commands::makeRippleTrim(project, m_sequence, m_dragClip, edge, dt, m_dragLinked);
+            case Tool::Roll: return commands::makeRollEdit(project, m_sequence, m_dragClip, edge, dt, m_dragLinked);
+            default: return commands::makeTrimEdge(project, m_sequence, m_dragClip, edge, dt, m_dragLinked);
+            }
+        });
+    } else if (drag == Drag::Slip && !m_dragDelta.isZero()) {
+        // Dragging right moves the content right: earlier source frames come into view.
+        const auto dt = -m_dragDelta;
+        runEdit([&] { return commands::makeSlipEdit(project, m_sequence, m_dragClip, dt, m_dragLinked); });
+    } else if (drag == Drag::Slide && !m_dragDelta.isZero()) {
+        const auto dt = m_dragDelta;
+        runEdit([&] { return commands::makeSlideEdit(project, m_sequence, m_dragClip, dt, m_dragLinked); });
     }
     m_dragDelta = Rational();
     m_dragTrackDelta = 0;
@@ -796,62 +854,108 @@ void TimelineView::razorAtPlayhead(bool allTracks) {
     }
 }
 
-void TimelineView::keyPressEvent(QKeyEvent* event) {
-    const auto* seq = sequence();
-    const auto mods = event->modifiers();
-    switch (event->key()) {
-    case Qt::Key_Delete:
-    case Qt::Key_Backspace: deleteSelection(); return;
-    case Qt::Key_V: setTool(Tool::Selection); return;
-    case Qt::Key_C: setTool(Tool::Razor); return;
-    case Qt::Key_S: setSnapping(!m_snapping); return;
-    case Qt::Key_K:
-        if (mods & Qt::ControlModifier) {
-            razorAtPlayhead(mods & Qt::ShiftModifier); // Ctrl+K / Ctrl+Shift+K: add edit
-            return;
-        }
-        break;
-    case Qt::Key_Equal:
-    case Qt::Key_Plus: setPixelsPerSecond(m_metrics.pixelsPerSecond * 1.5); return;
-    case Qt::Key_Minus: setPixelsPerSecond(m_metrics.pixelsPerSecond / 1.5); return;
-    case Qt::Key_Backslash: zoomToFit(); return;
-    case Qt::Key_Space:
-        if (m_transport.togglePlay) {
-            m_transport.togglePlay();
-        }
+void TimelineView::rippleDeleteSelection() {
+    if (m_selection.empty()) {
         return;
-    case Qt::Key_Left:
-    case Qt::Key_Right:
-        if (m_transport.step) {
-            m_transport.step((event->key() == Qt::Key_Left ? -1 : 1) * ((mods & Qt::ShiftModifier) ? 5 : 1));
-        }
-        return;
-    case Qt::Key_Up:
-    case Qt::Key_Down:
-        if (seq != nullptr && m_transport.seek) {
-            const auto point = event->key() == Qt::Key_Up ? previousEditPoint(*seq, playhead())
-                                                          : nextEditPoint(*seq, playhead());
-            if (point) {
-                m_transport.seek(*point);
-                scrollToTime(*point);
-            }
-        }
-        return;
-    case Qt::Key_Home:
-        if (m_transport.seek) {
-            m_transport.seek(Rational());
-            scrollToTime(Rational());
-        }
-        return;
-    case Qt::Key_End:
-        if (seq != nullptr && m_transport.seek) {
-            m_transport.seek(seq->duration());
-            scrollToTime(seq->duration());
-        }
-        return;
-    default: break;
     }
-    QWidget::keyPressEvent(event);
+    const std::vector<model::ClipId> ids(m_selection.begin(), m_selection.end());
+    runEdit([&] { return commands::makeRippleDelete(m_controller.project(), m_sequence, ids); });
+}
+
+void TimelineView::toggleLinkSelection() {
+    if (m_selection.empty()) {
+        return;
+    }
+    const auto& project = m_controller.project();
+    const std::vector<model::ClipId> ids(m_selection.begin(), m_selection.end());
+    // Link when the selection is not already one group; unlink otherwise (Premiere's Ctrl+L).
+    model::LinkId common;
+    bool oneGroup = true;
+    for (const auto id : ids) {
+        const auto* clip = project.findClip(id).clip;
+        if (clip == nullptr || clip->link.isNull() || (common && clip->link != common)) {
+            oneGroup = false;
+            break;
+        }
+        common = clip->link;
+    }
+    runEdit([&] {
+        return oneGroup ? commands::makeUnlinkClips(project, m_sequence, ids)
+                        : commands::makeLinkClips(project, m_sequence, ids);
+    });
+}
+
+void TimelineView::markIn() {
+    sequence_edits::markIn(m_controller, m_sequence, playhead());
+}
+
+void TimelineView::markOut() {
+    sequence_edits::markOut(m_controller, m_sequence, playhead());
+}
+
+void TimelineView::clearMarks() {
+    sequence_edits::clearMarks(m_controller, m_sequence);
+}
+
+void TimelineView::goToIn() {
+    if (const auto in = sequence_edits::markInOf(m_controller, m_sequence); in && m_transport.seek) {
+        m_transport.seek(*in);
+        scrollToTime(*in);
+    }
+}
+
+void TimelineView::goToOut() {
+    if (const auto out = sequence_edits::markOutFrameOf(m_controller, m_sequence); out && m_transport.seek) {
+        m_transport.seek(*out);
+        scrollToTime(*out);
+    }
+}
+
+void TimelineView::lift() {
+    sequence_edits::lift(m_controller, m_sequence);
+}
+
+void TimelineView::extract() {
+    sequence_edits::extract(m_controller, m_sequence);
+}
+
+void TimelineView::goToEditPoint(bool next) {
+    const auto* seq = sequence();
+    if (seq == nullptr || !m_transport.seek) {
+        return;
+    }
+    const auto point = next ? nextEditPoint(*seq, playhead()) : previousEditPoint(*seq, playhead());
+    if (point) {
+        m_transport.seek(*point);
+        scrollToTime(*point);
+    }
+}
+
+void TimelineView::stepPlayhead(int frames) {
+    if (m_transport.step) {
+        m_transport.step(frames);
+    }
+}
+
+void TimelineView::togglePlay() {
+    if (m_transport.togglePlay) {
+        m_transport.togglePlay();
+    }
+}
+
+void TimelineView::goToStart() {
+    if (m_transport.seek) {
+        m_transport.seek(Rational());
+        scrollToTime(Rational());
+    }
+}
+
+void TimelineView::goToEnd() {
+    const auto* seq = sequence();
+    if (seq != nullptr && m_transport.seek) {
+        m_transport.seek(seq->duration());
+        scrollToTime(seq->duration());
+    }
 }
 
 void TimelineView::contextMenuEvent(QContextMenuEvent* event) {
@@ -897,6 +1001,9 @@ void TimelineView::contextMenuEvent(QContextMenuEvent* event) {
                 });
             });
             menu.addAction(tr("Delete"), this, [this] { deleteSelection(); });
+            menu.addAction(tr("Ripple Delete"), this, [this] { rippleDeleteSelection(); });
+            menu.addSeparator();
+            menu.addAction(tr("Link / Unlink"), this, [this] { toggleLinkSelection(); });
         }
     }
     if (!menu.isEmpty()) {

@@ -174,6 +174,31 @@ private:
     model::SequenceSettings m_oldSettings;
 };
 
+// Sets the sequence In/Out marks (nullopt clears one). A new In past the Out clears the Out and
+// vice versa, like Premiere.
+class SetSequenceMarksCommand final : public Command {
+public:
+    SetSequenceMarksCommand(model::SequenceId id, std::optional<Rational> in, std::optional<Rational> out,
+                            std::string text)
+        : m_id(id), m_in(in), m_out(out), m_text(std::move(text)) {}
+    [[nodiscard]] std::string text() const override { return m_text; }
+    void redo(model::Project& project) override;
+    void undo(model::Project& project) override;
+
+private:
+    model::SequenceId m_id;
+    std::optional<Rational> m_in;
+    std::optional<Rational> m_out;
+    std::optional<Rational> m_oldIn;
+    std::optional<Rational> m_oldOut;
+    std::string m_text;
+};
+
+[[nodiscard]] std::unique_ptr<Command> setSequenceMarkIn(const model::Project& project, model::SequenceId id,
+                                                         std::optional<Rational> in);
+[[nodiscard]] std::unique_ptr<Command> setSequenceMarkOut(const model::Project& project, model::SequenceId id,
+                                                          std::optional<Rational> out);
+
 // ---------------------------------------------------------------------------------------------
 // Tracks
 

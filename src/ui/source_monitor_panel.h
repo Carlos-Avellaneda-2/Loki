@@ -16,6 +16,7 @@ namespace loki::ui {
 
 class MediaServices;
 class ProjectController;
+class ShortcutManager;
 class ScrubBar;
 class VideoView;
 
@@ -34,6 +35,7 @@ public:
     SourceMonitorPanel(SourceMonitorPanel&&) = delete;
     SourceMonitorPanel& operator=(SourceMonitorPanel&&) = delete;
 
+    void registerShortcuts(ShortcutManager& shortcuts);
     void loadMedia(model::MediaId id);
     void unloadMedia();
     [[nodiscard]] model::MediaId mediaId() const noexcept { return m_media; }
@@ -62,7 +64,6 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 private:
-    void createShortcuts();
     void refreshMarks();
     void onQualityChanged(int index);
     [[nodiscard]] const model::MediaItem* currentItem() const;

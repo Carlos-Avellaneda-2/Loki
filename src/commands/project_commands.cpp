@@ -250,6 +250,44 @@ void SetSequenceSettingsCommand::undo(Project& project) {
     mutate(project).setSequenceSettings(m_id, m_oldSettings);
 }
 
+void SetSequenceMarksCommand::redo(Project& project) {
+    const auto* seq = project.findSequence(m_id);
+    if (seq == nullptr) {
+        throw CommandError("Sequence does not exist");
+    }
+    m_oldIn = seq->markIn;
+    m_oldOut = seq->markOut;
+    mutate(project).setSequenceMarks(m_id, m_in, m_out);
+}
+
+void SetSequenceMarksCommand::undo(Project& project) {
+    mutate(project).setSequenceMarks(m_id, m_oldIn, m_oldOut);
+}
+
+std::unique_ptr<Command> setSequenceMarkIn(const Project& project, SequenceId id, std::optional<Rational> in) {
+    const auto* seq = project.findSequence(id);
+    if (seq == nullptr) {
+        throw CommandError("Sequence does not exist");
+    }
+    auto out = seq->markOut;
+    if (in && out && !(*in < *out)) {
+        out.reset();
+    }
+    return std::make_unique<SetSequenceMarksCommand>(id, in, out, in ? "Mark In" : "Clear In");
+}
+
+std::unique_ptr<Command> setSequenceMarkOut(const Project& project, SequenceId id, std::optional<Rational> out) {
+    const auto* seq = project.findSequence(id);
+    if (seq == nullptr) {
+        throw CommandError("Sequence does not exist");
+    }
+    auto in = seq->markIn;
+    if (in && out && !(*in < *out)) {
+        in.reset();
+    }
+    return std::make_unique<SetSequenceMarksCommand>(id, in, out, out ? "Mark Out" : "Clear Out");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Tracks
 

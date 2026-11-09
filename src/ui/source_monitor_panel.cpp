@@ -5,6 +5,7 @@
 #include "ui/project_controller.h"
 #include "ui/project_item_model.h"
 #include "ui/scrub_bar.h"
+#include "ui/shortcut_manager.h"
 #include "ui/video_view.h"
 #include "util/timecode.h"
 
@@ -14,11 +15,12 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMimeData>
-#include <QShortcut>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+
+#include <functional>
 
 namespace loki::ui {
 
@@ -144,7 +146,6 @@ SourceMonitorPanel::SourceMonitorPanel(ProjectController& controller, MediaServi
         }
     });
 
-    createShortcuts();
     m_timer = new QTimer(this);
     m_timer->setTimerType(Qt::PreciseTimer);
     m_timer->setInterval(10); // ~100 Hz polling; the view repaints only when the frame changes
@@ -154,33 +155,32 @@ SourceMonitorPanel::SourceMonitorPanel(ProjectController& controller, MediaServi
 
 SourceMonitorPanel::~SourceMonitorPanel() = default;
 
-void SourceMonitorPanel::createShortcuts() {
-    const auto bind = [this](const QKeySequence& key, auto slot) {
-        auto* s = new QShortcut(key, this);
-        s->setContext(Qt::WidgetWithChildrenShortcut);
-        connect(s, &QShortcut::activated, this, slot);
+void SourceMonitorPanel::registerShortcuts(ShortcutManager& s) {
+    const QString ctx = QStringLiteral("Source Monitor");
+    const auto add = [&](const char* id, const QString& text, const QKeySequence& key, std::function<void()> fn) {
+        s.create(this, QStringLiteral("source.") + QLatin1String(id), ctx, text, key, std::move(fn));
     };
-    bind(QKeySequence(Qt::Key_Space), [this] { togglePlay(); });
-    bind(QKeySequence(Qt::Key_L), [this] { shuttle(playback::ShuttleKey::L); });
-    bind(QKeySequence(Qt::Key_K), [this] { shuttle(playback::ShuttleKey::K); });
-    bind(QKeySequence(Qt::Key_J), [this] { shuttle(playback::ShuttleKey::J); });
-    bind(QKeySequence(Qt::Key_Left), [this] { step(-1); });
-    bind(QKeySequence(Qt::Key_Right), [this] { step(1); });
-    bind(QKeySequence(Qt::SHIFT | Qt::Key_Left), [this] { step(-5); });
-    bind(QKeySequence(Qt::SHIFT | Qt::Key_Right), [this] { step(5); });
-    bind(QKeySequence(Qt::Key_I), [this] { markIn(); });
-    bind(QKeySequence(Qt::Key_O), [this] { markOut(); });
-    bind(QKeySequence(Qt::SHIFT | Qt::Key_I), [this] { goToIn(); });
-    bind(QKeySequence(Qt::SHIFT | Qt::Key_O), [this] { goToOut(); });
-    bind(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_X), [this] { clearInOut(); });
-    bind(QKeySequence(Qt::Key_Home), [this] { m_engine->seek(Rational()); });
-    bind(QKeySequence(Qt::Key_End), [this] { m_engine->seek(m_engine->duration()); });
-    bind(QKeySequence(Qt::Key_Comma), [this] {
+    add("play", tr("Play-Stop Toggle"), QKeySequence(Qt::Key_Space), [this] { togglePlay(); });
+    add("shuttleRight", tr("Shuttle Right"), QKeySequence(Qt::Key_L), [this] { shuttle(playback::ShuttleKey::L); });
+    add("shuttleStop", tr("Shuttle Stop"), QKeySequence(Qt::Key_K), [this] { shuttle(playback::ShuttleKey::K); });
+    add("shuttleLeft", tr("Shuttle Left"), QKeySequence(Qt::Key_J), [this] { shuttle(playback::ShuttleKey::J); });
+    add("stepBack", tr("Step Back 1 Frame"), QKeySequence(Qt::Key_Left), [this] { step(-1); });
+    add("stepForward", tr("Step Forward 1 Frame"), QKeySequence(Qt::Key_Right), [this] { step(1); });
+    add("stepBack5", tr("Step Back 5 Frames"), QKeySequence(Qt::SHIFT | Qt::Key_Left), [this] { step(-5); });
+    add("stepForward5", tr("Step Forward 5 Frames"), QKeySequence(Qt::SHIFT | Qt::Key_Right), [this] { step(5); });
+    add("markIn", tr("Mark In"), QKeySequence(Qt::Key_I), [this] { markIn(); });
+    add("markOut", tr("Mark Out"), QKeySequence(Qt::Key_O), [this] { markOut(); });
+    add("goToIn", tr("Go to In"), QKeySequence(Qt::SHIFT | Qt::Key_I), [this] { goToIn(); });
+    add("goToOut", tr("Go to Out"), QKeySequence(Qt::SHIFT | Qt::Key_O), [this] { goToOut(); });
+    add("clearMarks", tr("Clear In and Out"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_X), [this] { clearInOut(); });
+    add("start", tr("Go to Start"), QKeySequence(Qt::Key_Home), [this] { m_engine->seek(Rational()); });
+    add("end", tr("Go to End"), QKeySequence(Qt::Key_End), [this] { m_engine->seek(m_engine->duration()); });
+    add("insert", tr("Insert"), QKeySequence(Qt::Key_Comma), [this] {
         if (m_media) {
             emit editRequested(m_media, true);
         }
     });
-    bind(QKeySequence(Qt::Key_Period), [this] {
+    add("overwrite", tr("Overwrite"), QKeySequence(Qt::Key_Period), [this] {
         if (m_media) {
             emit editRequested(m_media, false);
         }

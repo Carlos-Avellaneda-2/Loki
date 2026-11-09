@@ -1,6 +1,7 @@
 #include "ui/timeline/timeline_panel.h"
 
 #include "ui/project_controller.h"
+#include "ui/shortcut_manager.h"
 
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -12,6 +13,7 @@
 #include <QVBoxLayout>
 
 #include <cmath>
+#include <functional>
 
 namespace loki::ui::timeline {
 
@@ -41,10 +43,21 @@ TimelinePanel::TimelinePanel(ProjectController& controller, MediaServices& servi
         b->setAutoRaise(true);
         return b;
     };
-    m_selectTool = toolButton(tr("Select"), tr("Selection Tool (V)"));
-    m_razorTool = toolButton(tr("Razor"), tr("Razor Tool (C) - Shift+click cuts all tracks"));
+    const std::pair<Tool, std::pair<QString, QString>> tools[] = {
+        {Tool::Selection, {tr("Select"), tr("Selection Tool (V)")}},
+        {Tool::Ripple, {tr("Ripple"), tr("Ripple Edit Tool (B): trim and close the gap")}},
+        {Tool::Roll, {tr("Roll"), tr("Rolling Edit Tool (N): move an edit point")}},
+        {Tool::Razor, {tr("Razor"), tr("Razor Tool (C) - Shift+click cuts all tracks")}},
+        {Tool::Slip, {tr("Slip"), tr("Slip Tool (Y): change the source range, keep position")}},
+        {Tool::Slide, {tr("Slide"), tr("Slide Tool (U): move a clip between its neighbours")}},
+    };
+    for (const auto& [tool, labels] : tools) {
+        auto* b = toolButton(labels.first, labels.second);
+        b->setChecked(tool == Tool::Selection);
+        connect(b, &QToolButton::clicked, this, [this, tool = tool] { m_view->setTool(tool); });
+        m_toolButtons.emplace_back(tool, b);
+    }
     m_snap = toolButton(tr("Snap"), tr("Snap in Timeline (S)"));
-    m_selectTool->setChecked(true);
     m_snap->setChecked(true);
     m_zoom = new QSlider(Qt::Horizontal, this);
     m_zoom->setRange(sliderFromPps(0.5), sliderFromPps(4000));
@@ -56,8 +69,9 @@ TimelinePanel::TimelinePanel(ProjectController& controller, MediaServices& servi
     bar->setContentsMargins(4, 2, 4, 2);
     bar->addWidget(m_title);
     bar->addStretch();
-    bar->addWidget(m_selectTool);
-    bar->addWidget(m_razorTool);
+    for (const auto& [tool, button] : m_toolButtons) {
+        bar->addWidget(button);
+    }
     bar->addSpacing(12);
     bar->addWidget(m_snap);
     bar->addSpacing(12);
@@ -79,12 +93,11 @@ TimelinePanel::TimelinePanel(ProjectController& controller, MediaServices& servi
     layout->addLayout(bar);
     layout->addLayout(grid, 1);
 
-    connect(m_selectTool, &QToolButton::clicked, this, [this] { m_view->setTool(Tool::Selection); });
-    connect(m_razorTool, &QToolButton::clicked, this, [this] { m_view->setTool(Tool::Razor); });
     connect(m_snap, &QToolButton::toggled, m_view, &TimelineView::setSnapping);
     connect(m_view, &TimelineView::toolChanged, this, [this](Tool tool) {
-        m_selectTool->setChecked(tool == Tool::Selection);
-        m_razorTool->setChecked(tool == Tool::Razor);
+        for (const auto& [t, button] : m_toolButtons) {
+            button->setChecked(t == tool);
+        }
     });
     connect(m_view, &TimelineView::snappingChanged, m_snap, &QToolButton::setChecked);
     connect(m_zoom, &QSlider::valueChanged, this, [this](int v) {
@@ -139,6 +152,47 @@ void TimelinePanel::setSequence(model::SequenceId id) {
 
 void TimelinePanel::setTransport(Transport transport) {
     m_view->setTransport(std::move(transport));
+}
+
+void TimelinePanel::registerShortcuts(ShortcutManager& s) {
+    const QString ctx = QStringLiteral("Timeline");
+    auto* v = m_view;
+    const auto add = [&](const char* id, const QString& text, const QKeySequence& key, std::function<void()> fn) {
+        s.create(v, QStringLiteral("timeline.") + QLatin1String(id), ctx, text, key, std::move(fn));
+    };
+    add("tool.selection", tr("Selection Tool"), QKeySequence(Qt::Key_V), [v] { v->setTool(Tool::Selection); });
+    add("tool.razor", tr("Razor Tool"), QKeySequence(Qt::Key_C), [v] { v->setTool(Tool::Razor); });
+    add("tool.ripple", tr("Ripple Edit Tool"), QKeySequence(Qt::Key_B), [v] { v->setTool(Tool::Ripple); });
+    add("tool.roll", tr("Rolling Edit Tool"), QKeySequence(Qt::Key_N), [v] { v->setTool(Tool::Roll); });
+    add("tool.slip", tr("Slip Tool"), QKeySequence(Qt::Key_Y), [v] { v->setTool(Tool::Slip); });
+    add("tool.slide", tr("Slide Tool"), QKeySequence(Qt::Key_U), [v] { v->setTool(Tool::Slide); });
+    add("snap", tr("Snap in Timeline"), QKeySequence(Qt::Key_S), [v] { v->setSnapping(!v->snapping()); });
+    add("delete", tr("Clear (Delete)"), QKeySequence(Qt::Key_Delete), [v] { v->deleteSelection(); });
+    add("delete.alt", tr("Clear (Backspace)"), QKeySequence(Qt::Key_Backspace), [v] { v->deleteSelection(); });
+    add("rippleDelete", tr("Ripple Delete"), QKeySequence(Qt::SHIFT | Qt::Key_Delete), [v] { v->rippleDeleteSelection(); });
+    add("addEdit", tr("Add Edit"), QKeySequence(Qt::CTRL | Qt::Key_K), [v] { v->razorAtPlayhead(false); });
+    add("addEditAll", tr("Add Edit to All Tracks"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K),
+        [v] { v->razorAtPlayhead(true); });
+    add("link", tr("Link / Unlink"), QKeySequence(Qt::CTRL | Qt::Key_L), [v] { v->toggleLinkSelection(); });
+    add("zoomIn", tr("Zoom In"), QKeySequence(Qt::Key_Equal), [v] { v->setPixelsPerSecond(v->metrics().pixelsPerSecond * 1.5); });
+    add("zoomOut", tr("Zoom Out"), QKeySequence(Qt::Key_Minus), [v] { v->setPixelsPerSecond(v->metrics().pixelsPerSecond / 1.5); });
+    add("zoomFit", tr("Zoom to Sequence"), QKeySequence(Qt::Key_Backslash), [v] { v->zoomToFit(); });
+    add("play", tr("Play-Stop Toggle"), QKeySequence(Qt::Key_Space), [v] { v->togglePlay(); });
+    add("stepBack", tr("Step Back 1 Frame"), QKeySequence(Qt::Key_Left), [v] { v->stepPlayhead(-1); });
+    add("stepForward", tr("Step Forward 1 Frame"), QKeySequence(Qt::Key_Right), [v] { v->stepPlayhead(1); });
+    add("stepBack5", tr("Step Back 5 Frames"), QKeySequence(Qt::SHIFT | Qt::Key_Left), [v] { v->stepPlayhead(-5); });
+    add("stepForward5", tr("Step Forward 5 Frames"), QKeySequence(Qt::SHIFT | Qt::Key_Right), [v] { v->stepPlayhead(5); });
+    add("prevEdit", tr("Go to Previous Edit Point"), QKeySequence(Qt::Key_Up), [v] { v->goToEditPoint(false); });
+    add("nextEdit", tr("Go to Next Edit Point"), QKeySequence(Qt::Key_Down), [v] { v->goToEditPoint(true); });
+    add("start", tr("Go to Sequence Start"), QKeySequence(Qt::Key_Home), [v] { v->goToStart(); });
+    add("end", tr("Go to Sequence End"), QKeySequence(Qt::Key_End), [v] { v->goToEnd(); });
+    add("markIn", tr("Mark In"), QKeySequence(Qt::Key_I), [v] { v->markIn(); });
+    add("markOut", tr("Mark Out"), QKeySequence(Qt::Key_O), [v] { v->markOut(); });
+    add("goToIn", tr("Go to In"), QKeySequence(Qt::SHIFT | Qt::Key_I), [v] { v->goToIn(); });
+    add("goToOut", tr("Go to Out"), QKeySequence(Qt::SHIFT | Qt::Key_O), [v] { v->goToOut(); });
+    add("clearMarks", tr("Clear In and Out"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_X), [v] { v->clearMarks(); });
+    add("lift", tr("Lift"), QKeySequence(Qt::Key_Semicolon), [v] { v->lift(); });
+    add("extract", tr("Extract"), QKeySequence(Qt::Key_Apostrophe), [v] { v->extract(); });
 }
 
 void TimelinePanel::syncScrollBars() {

@@ -1,6 +1,7 @@
 #include "commands/edit_commands.h"
 
 #include <algorithm>
+#include <functional>
 #include <unordered_set>
 
 namespace loki::commands {
@@ -577,6 +578,372 @@ std::unique_ptr<Command> makeDeleteClips(const Project& project, SequenceId sequ
         plan.take(id);
     }
     return plan.build("Delete");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 7
+
+namespace {
+
+// Media duration limit for a clip (nullopt = unlimited: stills or unknown duration).
+std::optional<Rational> mediaLimit(const Project& project, const Clip& clip) {
+    const auto* media = project.findMedia(clip.media);
+    if (media == nullptr || media->info.isStill || !media->info.duration.isPositive()) {
+        return std::nullopt;
+    }
+    return media->info.duration;
+}
+
+struct Range {
+    std::optional<Rational> lo;
+    std::optional<Rational> hi;
+    void lower(const Rational& v) { lo = lo ? max(*lo, v) : v; }
+    void upper(const Rational& v) { hi = hi ? min(*hi, v) : v; }
+    [[nodiscard]] std::optional<Rational> clamp(const Rational& d) const {
+        if (lo && hi && *hi < *lo) {
+            return std::nullopt;
+        }
+        Rational r = d;
+        if (lo) {
+            r = max(r, *lo);
+        }
+        if (hi) {
+            r = min(r, *hi);
+        }
+        return r;
+    }
+};
+
+std::vector<ClipId> groupOf(const EditPlan& plan, ClipId clip, bool includeLinked) {
+    return includeLinked ? plan.withLinked(clip) : std::vector<ClipId>{clip};
+}
+
+const Clip* neighbourAt(const std::vector<Clip>& clips, const Rational& time, bool endingThere, ClipId except) {
+    for (const auto& c : clips) {
+        if (c.id != except && (endingThere ? c.end() == time : c.start == time)) {
+            return &c;
+        }
+    }
+    return nullptr;
+}
+
+void forUnlockedTracks(const Sequence& seq, const std::function<void(const Track&)>& fn) {
+    for (const auto* list : {&seq.videoTracks, &seq.audioTracks}) {
+        for (const auto& t : *list) {
+            if (!t.state.locked) {
+                fn(t);
+            }
+        }
+    }
+}
+
+// Gap limits around clip `c` on its track: end of the previous clip and start of the next one.
+std::pair<Rational, std::optional<Rational>> gapAround(const std::vector<Clip>& list, const Clip& c) {
+    Rational gapStart;
+    std::optional<Rational> gapEnd;
+    for (const auto& other : list) {
+        if (other.id == c.id) {
+            continue;
+        }
+        if (other.end() <= c.start) {
+            gapStart = max(gapStart, other.end());
+        } else if (other.start >= c.end()) {
+            gapEnd = gapEnd ? min(*gapEnd, other.start) : other.start;
+        }
+    }
+    return {gapStart, gapEnd};
+}
+
+} // namespace
+
+std::unique_ptr<Command> makeRippleTrim(const Project& project, SequenceId sequence, ClipId clip, ClipEdge edge,
+                                        const Rational& delta, bool includeLinked) {
+    EditPlan plan(project, sequence);
+    const auto ids = groupOf(plan, clip, includeLinked);
+    const Rational minDuration = frameDuration(plan.sequence());
+    Range range;
+    Rational oldEnd;
+    for (const auto id : ids) {
+        const auto placed = plan.find(id);
+        if (!placed) {
+            continue;
+        }
+        const auto& c = placed->clip;
+        oldEnd = c.end();
+        const auto limit = mediaLimit(project, c);
+        if (edge == ClipEdge::In) {
+            range.lower(-c.sourceIn);
+            range.upper(c.duration - minDuration);
+        } else {
+            if (limit) {
+                range.upper(*limit - c.sourceOut());
+            }
+            range.lower(minDuration - c.duration);
+        }
+    }
+    const auto d = range.clamp(delta);
+    if (!d || d->isZero()) {
+        return nullptr;
+    }
+    // Everything after the edit point (on every unlocked track) follows the change in duration.
+    const Rational shift = edge == ClipEdge::In ? -*d : *d;
+    std::vector<PlacedClip> trimmed;
+    for (const auto id : ids) {
+        if (auto placed = plan.take(id)) {
+            if (edge == ClipEdge::In) {
+                placed->clip.sourceIn += *d;
+                placed->clip.duration -= *d;
+            } else {
+                placed->clip.duration += *d;
+            }
+            trimmed.push_back(std::move(*placed));
+        }
+    }
+    forUnlockedTracks(plan.sequence(), [&](const Track& t) { plan.shiftFrom(t.id, oldEnd, shift); });
+    for (auto& p : trimmed) {
+        plan.add(p.track, std::move(p.clip));
+    }
+    return plan.build("Ripple Trim");
+}
+
+std::unique_ptr<Command> makeRollEdit(const Project& project, SequenceId sequence, ClipId clip, ClipEdge edge,
+                                      const Rational& delta, bool includeLinked) {
+    EditPlan plan(project, sequence);
+    const Rational minDuration = frameDuration(plan.sequence());
+    struct Pair {
+        ClipId left;
+        ClipId right;
+    };
+    std::vector<Pair> pairs;
+    Range range;
+    for (const auto id : groupOf(plan, clip, includeLinked)) {
+        const auto placed = plan.find(id);
+        if (!placed) {
+            continue;
+        }
+        const auto c = placed->clip;
+        const auto& list = plan.clips(placed->track);
+        const Clip* left = edge == ClipEdge::Out ? &c : neighbourAt(list, c.start, true, c.id);
+        const Clip* right = edge == ClipEdge::In ? &c : neighbourAt(list, c.end(), false, c.id);
+        Pair pair;
+        if (left != nullptr) {
+            pair.left = left->id;
+            if (const auto limit = mediaLimit(project, *left)) {
+                range.upper(*limit - left->sourceOut());
+            }
+            range.lower(minDuration - left->duration);
+        }
+        if (right != nullptr) {
+            pair.right = right->id;
+            range.lower(-right->sourceIn);
+            range.upper(right->duration - minDuration);
+        }
+        if (left == nullptr || right == nullptr) {
+            // No neighbour on that side: the gap absorbs the roll like a normal trim.
+            const auto [gapStart, gapEnd] = gapAround(list, c);
+            if (edge == ClipEdge::Out && gapEnd) {
+                range.upper(*gapEnd - c.end());
+            }
+            if (edge == ClipEdge::In) {
+                range.lower(gapStart - c.start);
+            }
+        }
+        pairs.push_back(pair);
+    }
+    const auto d = range.clamp(delta);
+    if (!d || d->isZero()) {
+        return nullptr;
+    }
+    for (const auto& pair : pairs) {
+        if (pair.left) {
+            auto l = plan.take(pair.left);
+            l->clip.duration += *d;
+            plan.add(l->track, std::move(l->clip));
+        }
+        if (pair.right) {
+            auto r = plan.take(pair.right);
+            r->clip.start += *d;
+            r->clip.sourceIn += *d;
+            r->clip.duration -= *d;
+            plan.add(r->track, std::move(r->clip));
+        }
+    }
+    return plan.build("Rolling Edit");
+}
+
+std::unique_ptr<Command> makeSlipEdit(const Project& project, SequenceId sequence, ClipId clip, const Rational& delta,
+                                      bool includeLinked) {
+    EditPlan plan(project, sequence);
+    const auto ids = groupOf(plan, clip, includeLinked);
+    Range range;
+    for (const auto id : ids) {
+        if (const auto placed = plan.find(id)) {
+            range.lower(-placed->clip.sourceIn);
+            if (const auto limit = mediaLimit(project, placed->clip)) {
+                range.upper(*limit - placed->clip.sourceOut());
+            }
+        }
+    }
+    const auto d = range.clamp(delta);
+    if (!d || d->isZero()) {
+        return nullptr;
+    }
+    for (const auto id : ids) {
+        if (auto placed = plan.take(id)) {
+            placed->clip.sourceIn += *d;
+            plan.add(placed->track, std::move(placed->clip));
+        }
+    }
+    return plan.build("Slip");
+}
+
+std::unique_ptr<Command> makeSlideEdit(const Project& project, SequenceId sequence, ClipId clip, const Rational& delta,
+                                       bool includeLinked) {
+    EditPlan plan(project, sequence);
+    const auto ids = groupOf(plan, clip, includeLinked);
+    const Rational minDuration = frameDuration(plan.sequence());
+    struct Neighbours {
+        ClipId self;
+        ClipId left;
+        ClipId right;
+    };
+    std::vector<Neighbours> all;
+    Range range;
+    for (const auto id : ids) {
+        const auto placed = plan.find(id);
+        if (!placed) {
+            continue;
+        }
+        const auto c = placed->clip;
+        const auto& list = plan.clips(placed->track);
+        Neighbours n{c.id, {}, {}};
+        const auto [gapStart, gapEnd] = gapAround(list, c);
+        if (const auto* left = neighbourAt(list, c.start, true, c.id)) {
+            n.left = left->id;
+            range.lower(minDuration - left->duration);
+            if (const auto limit = mediaLimit(project, *left)) {
+                range.upper(*limit - left->sourceOut());
+            }
+        } else {
+            range.lower(gapStart - c.start);
+        }
+        if (const auto* right = neighbourAt(list, c.end(), false, c.id)) {
+            n.right = right->id;
+            range.lower(-right->sourceIn);
+            range.upper(right->duration - minDuration);
+        } else if (gapEnd) {
+            range.upper(*gapEnd - c.end());
+        }
+        all.push_back(n);
+    }
+    const auto d = range.clamp(delta);
+    if (!d || d->isZero()) {
+        return nullptr;
+    }
+    for (const auto& n : all) {
+        if (n.left) {
+            auto l = plan.take(n.left);
+            l->clip.duration += *d;
+            plan.add(l->track, std::move(l->clip));
+        }
+        if (n.right) {
+            auto r = plan.take(n.right);
+            r->clip.start += *d;
+            r->clip.sourceIn += *d;
+            r->clip.duration -= *d;
+            plan.add(r->track, std::move(r->clip));
+        }
+        auto self = plan.take(n.self);
+        self->clip.start += *d;
+        plan.add(self->track, std::move(self->clip));
+    }
+    return plan.build("Slide");
+}
+
+std::unique_ptr<Command> makeRippleDelete(const Project& project, SequenceId sequence, const std::vector<ClipId>& clips) {
+    EditPlan plan(project, sequence);
+    std::set<ClipId> ids;
+    for (const auto id : clips) {
+        for (const auto linked : plan.withLinked(id)) {
+            ids.insert(linked);
+        }
+    }
+    std::optional<Rational> start;
+    std::optional<Rational> end;
+    for (const auto id : ids) {
+        if (auto placed = plan.take(id)) {
+            start = start ? min(*start, placed->clip.start) : placed->clip.start;
+            end = end ? max(*end, placed->clip.end()) : placed->clip.end();
+        }
+    }
+    if (!start) {
+        return nullptr;
+    }
+    const Rational gap = *end - *start;
+    forUnlockedTracks(plan.sequence(), [&](const Track& t) {
+        const auto& list = plan.clips(t.id);
+        const bool free = std::none_of(list.begin(), list.end(),
+                                       [&](const Clip& c) { return c.start < *end && *start < c.end(); });
+        if (free) {
+            plan.shiftFrom(t.id, *end, -gap);
+        }
+    });
+    return plan.build("Ripple Delete");
+}
+
+std::unique_ptr<Command> makeLiftRange(const Project& project, SequenceId sequence, const Rational& in,
+                                       const Rational& out) {
+    if (!(in < out)) {
+        throw CommandError("Set In and Out points first");
+    }
+    EditPlan plan(project, sequence);
+    forUnlockedTracks(plan.sequence(), [&](const Track& t) { plan.clearRange(t.id, in, out); });
+    return plan.build("Lift");
+}
+
+std::unique_ptr<Command> makeExtractRange(const Project& project, SequenceId sequence, const Rational& in,
+                                          const Rational& out) {
+    if (!(in < out)) {
+        throw CommandError("Set In and Out points first");
+    }
+    EditPlan plan(project, sequence);
+    forUnlockedTracks(plan.sequence(), [&](const Track& t) {
+        plan.clearRange(t.id, in, out);
+        plan.shiftFrom(t.id, out, in - out);
+    });
+    return plan.build("Extract");
+}
+
+std::unique_ptr<Command> makeLinkClips(const Project& project, SequenceId sequence, const std::vector<ClipId>& clips) {
+    if (clips.size() < 2) {
+        throw CommandError("Select at least two clips to link");
+    }
+    EditPlan plan(project, sequence);
+    const LinkId link = LinkId::generate();
+    for (const auto id : clips) {
+        if (auto placed = plan.take(id)) {
+            placed->clip.link = link;
+            plan.add(placed->track, std::move(placed->clip));
+        }
+    }
+    return plan.build("Link");
+}
+
+std::unique_ptr<Command> makeUnlinkClips(const Project& project, SequenceId sequence, const std::vector<ClipId>& clips) {
+    EditPlan plan(project, sequence);
+    std::set<ClipId> ids;
+    for (const auto id : clips) {
+        for (const auto linked : plan.withLinked(id)) {
+            ids.insert(linked);
+        }
+    }
+    for (const auto id : ids) {
+        if (auto placed = plan.take(id)) {
+            placed->clip.link = LinkId();
+            plan.add(placed->track, std::move(placed->clip));
+        }
+    }
+    return plan.build("Unlink");
 }
 
 } // namespace loki::commands

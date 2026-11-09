@@ -43,6 +43,9 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - Ediciones de timeline: construir con `commands::EditPlan` (copia de pistas → diff → un `ReplaceClipsCommand`);
   no encadenar comandos sueltos. Drags del timeline: sombra + commit al soltar.
 - Keyframes en tiempo del *source* del clip. IDs = UUID (`model::Id<Tag>` tipado).
+- Atajos: nunca `QShortcut`/`keyPressEvent` sueltos; registrar con `ShortcutManager::create/bind` (id estable
+  `<panel>.<acción>`, contexto de panel o "Application", tecla por defecto Premiere). Sin conflictos por contexto
+  (hay test que lo verifica). Los tests Qt usan settings aislados (org "LokiTests").
 - Cambio de esquema `.loki`: subir `kProjectFormatVersion` + migración + golden en `tests/data/`.
 - RAII; sin `new`/`delete` crudos; sin globales mutables; FFmpeg en `unique_ptr` con deleter.
   Excepción: `new` de QObject/QWidget con padre Qt (el padre es dueño).
@@ -86,7 +89,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 4. Reproducción — PlaybackClock (audio master), PlaybackEngine, J/K/L, scrub, Source Monitor GL
 - [x] 5. Línea de tiempo + Monitor de Programa — EditPlan/ReplaceClipsCommand (insert/overwrite/razor/move/trim/delete), sources de playback (archivo/secuencia), TimelineView, Program Monitor, 251 tests
 - [x] 6. Composición GPU y efectos — effect registry, CompositeFrame (render_core), GlCompositor ping-pong RGBA16F + 8 blend modes, Effect Controls con keyframes, 269 tests (+4 GPU)
-- [ ] 7. Edición avanzada
+- [x] 7. Edición avanzada — ripple/roll/slip/slide, ripple delete, lift/extract con marcas In/Out de secuencia, link/unlink, ShortcutManager + diálogo de atajos, 285 tests
 - [ ] 8. Audio
 - [ ] 9. Transiciones, color, títulos
 - [ ] 10. Exportación

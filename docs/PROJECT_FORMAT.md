@@ -51,6 +51,8 @@ movió la carpeta del proyecto junto con ellos.
 - `videoTracks[0]` es V1, la pista de abajo.
 - Los `time` de los keyframes están en el tiempo del *source* del clip.
 - `interpolation` puede ser `hold`, `linear` o `bezier`.
+- Una secuencia puede tener `"markIn"` y `"markOut"` (tiempos `[num, den]`, opcionales, Out exclusivo). Si
+  faltan, la secuencia no tiene marcas; los archivos v1 anteriores siguen siendo válidos (D13).
 
 ## Validación
 

@@ -17,6 +17,7 @@ class MediaServices;
 class ProjectController;
 class ProjectPanel;
 class SourceMonitorPanel;
+class ShortcutManager;
 class ProgramMonitorPanel;
 class EffectControlsPanel;
 namespace timeline {
@@ -62,6 +63,7 @@ public:
 
     [[nodiscard]] ui::ProjectController* projectController() const noexcept { return m_controller; }
     [[nodiscard]] ui::MediaServices* mediaServices() const noexcept { return m_services; }
+    [[nodiscard]] ui::ShortcutManager* shortcuts() const noexcept { return m_shortcuts; }
     [[nodiscard]] ui::ProjectPanel* projectPanel() const noexcept { return m_projectPanel; }
     [[nodiscard]] ui::SourceMonitorPanel* sourceMonitor() const noexcept { return m_sourceMonitor; }
     [[nodiscard]] ui::ProgramMonitorPanel* programMonitor() const noexcept { return m_programMonitor; }
@@ -89,6 +91,7 @@ private:
 
     ui::ProjectController* m_controller = nullptr; // owned by this window (Qt parent)
     ui::MediaServices* m_services = nullptr;       // owned by this window (Qt parent)
+    ui::ShortcutManager* m_shortcuts = nullptr;    // owned by this window (Qt parent)
     ui::ProjectPanel* m_projectPanel = nullptr;    // owned by its dock widget
     ui::SourceMonitorPanel* m_sourceMonitor = nullptr; // owned by its dock widget
     ui::ProgramMonitorPanel* m_programMonitor = nullptr; // owned by its dock widget

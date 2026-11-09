@@ -135,6 +135,9 @@ struct Sequence {
     SequenceSettings settings;
     std::vector<Track> videoTracks; // index 0 = V1 (bottom)
     std::vector<Track> audioTracks; // index 0 = A1
+    // Sequence In/Out marks (lift/extract, D13); Out is exclusive.
+    std::optional<Rational> markIn;
+    std::optional<Rational> markOut;
 
     [[nodiscard]] const std::vector<Track>& tracks(TrackKind kind) const noexcept {
         return kind == TrackKind::Video ? videoTracks : audioTracks;

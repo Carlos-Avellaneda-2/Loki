@@ -21,7 +21,7 @@ class ProjectController;
 
 namespace loki::ui::timeline {
 
-enum class Tool { Selection, Razor };
+enum class Tool { Selection, Razor, Ripple, Roll, Slip, Slide };
 
 // Connection to the Program Monitor's playback engine (the playhead lives there).
 struct Transport {
@@ -70,7 +70,21 @@ public:
 
     // Edits (public for keyboard actions and tests).
     void deleteSelection();
+    void rippleDeleteSelection();
     void razorAtPlayhead(bool allTracks);
+    void toggleLinkSelection();
+    void markIn();
+    void markOut();
+    void clearMarks();
+    void goToIn();
+    void goToOut();
+    void lift();
+    void extract();
+    void goToEditPoint(bool next);
+    void stepPlayhead(int frames);
+    void togglePlay();
+    void goToStart();
+    void goToEnd();
 
 signals:
     void statusMessage(const QString& text);
@@ -87,7 +101,6 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
@@ -95,7 +108,7 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 private:
-    enum class Drag { None, Scrub, Move, TrimIn, TrimOut };
+    enum class Drag { None, Scrub, Move, TrimIn, TrimOut, Slip, Slide };
 
     struct DropPreview {
         model::MediaId media;

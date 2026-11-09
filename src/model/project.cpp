@@ -452,6 +452,16 @@ void ProjectMutator::setSequenceName(SequenceId id, std::string name) {
     m_project.notify({ChangeKind::SequenceChanged, id.uuid(), {}});
 }
 
+void ProjectMutator::setSequenceMarks(SequenceId id, std::optional<Rational> in, std::optional<Rational> out) {
+    auto& seq = sequence(id);
+    if ((in && in->isNegative()) || (out && out->isNegative()) || (in && out && !(*in < *out))) {
+        fail("sequence In must be before Out and not negative");
+    }
+    seq.markIn = in;
+    seq.markOut = out;
+    m_project.notify({ChangeKind::SequenceChanged, id.uuid(), {}});
+}
+
 void ProjectMutator::setSequenceSettings(SequenceId id, SequenceSettings settings) {
     auto& seq = sequence(id);
     if (auto p = settingsProblem(settings); !p.empty()) {
