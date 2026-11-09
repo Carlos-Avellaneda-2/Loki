@@ -1,5 +1,7 @@
 #include "ui/project_controller.h"
 
+#include <utility>
+
 #include "model/project_json.h"
 #include "util/atomic_file.h"
 
@@ -90,6 +92,14 @@ bool ProjectController::openProject(const QString& path) {
     return true;
 }
 
+bool ProjectController::openRecovered(const QString& recoveryFile, const QString& originalPath) {
+    if (!openProject(recoveryFile)) {
+        return false;
+    }
+    m_recoveredPath = originalPath;
+    return true;
+}
+
 bool ProjectController::saveProject() {
     return !m_filePath.isEmpty() && startSave(m_filePath);
 }
@@ -131,6 +141,7 @@ void ProjectController::onSaveDone() {
         return;
     }
     setFilePath(m_pendingSavePath);
+    m_forceModified = false;
     if (!m_undoStack.markCleanAt(m_pendingSavePoint)) {
         spdlog::info("Project changed while saving; it stays modified");
     }
@@ -145,7 +156,12 @@ void ProjectController::onLoadDone() {
         emit openFinished(false, result.error);
         return;
     }
-    replaceProject(std::move(*result.project), m_pendingLoadPath);
+    const auto recovered = std::exchange(m_recoveredPath, std::nullopt);
+    replaceProject(std::move(*result.project), recovered ? *recovered : m_pendingLoadPath);
+    if (recovered) {
+        m_forceModified = true;
+        onUndoStackChanged(); // emits modifiedChanged(true)
+    }
     spdlog::info("Project opened from {}", m_pendingLoadPath.toStdString());
     emit openFinished(true, QString());
 }
@@ -154,6 +170,7 @@ void ProjectController::replaceProject(model::Project project, const QString& pa
     // Whole-document replacement (new/open) is not an edit: it resets the history.
     // Move-assignment keeps this Project object (and its observers); only the data changes.
     m_project = std::move(project);
+    m_forceModified = false;
     m_undoStack.clear();
     setFilePath(path);
     emit projectReset();

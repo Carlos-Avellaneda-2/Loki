@@ -8,6 +8,7 @@
 #include "util/logging.h"
 
 #include <QApplication>
+#include <QTimer>
 #include <QDir>
 #include <QSettings>
 #include <QStandardPaths>
@@ -64,6 +65,8 @@ int main(int argc, char* argv[]) {
     } else {
         window.showMaximized(); // first run: fill the screen like Premiere does
     }
+    // After a crash: offer the recovery copy once the window is up (D25).
+    QTimer::singleShot(0, &window, [&window] { window.checkForRecovery(); });
 
     // Command line: a .loki file opens that project; any other paths are imported as media.
     QStringList importPaths;

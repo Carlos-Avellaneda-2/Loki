@@ -7,7 +7,9 @@
 
 #include <memory>
 
+class QAction;
 class QComboBox;
+class QHBoxLayout;
 class QLabel;
 class QTimer;
 class QToolButton;
@@ -36,6 +38,10 @@ public:
     SourceMonitorPanel& operator=(SourceMonitorPanel&&) = delete;
 
     void registerShortcuts(ShortcutManager& shortcuts);
+    // Proxy/original toggle (D24): a shared checkable action shown as a toolbar button.
+    void setProxyAction(QAction* action);
+    void setUseProxies(bool on);
+    [[nodiscard]] bool useProxies() const noexcept { return m_useProxies; }
     void loadMedia(model::MediaId id);
     void unloadMedia();
     [[nodiscard]] model::MediaId mediaId() const noexcept { return m_media; }
@@ -82,6 +88,8 @@ private:
     QLabel* m_durationLabel = nullptr;
     QToolButton* m_playButton = nullptr;
     QComboBox* m_quality = nullptr;
+    QHBoxLayout* m_info = nullptr;
+    bool m_useProxies = false;
     QTimer* m_timer = nullptr;
 };
 

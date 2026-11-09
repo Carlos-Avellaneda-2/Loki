@@ -119,7 +119,11 @@ struct SequenceSnapshot {
     model::Sequence sequence;
     std::unordered_map<model::MediaId, model::MediaItem> media;
     std::uint64_t generation = 0; // changes with every edit (frame cache key)
+    bool useProxies = false;      // preview only (D24); export always reads the originals
 };
+
+// File to decode pictures from: the proxy when enabled and present, else the original.
+[[nodiscard]] std::filesystem::path videoPathFor(const model::MediaItem& media, bool useProxies);
 
 // Builds the composite of every enabled clip on visible video tracks (V1 at the bottom) with its
 // Motion and Opacity resolved at the time (D11). One decoder per clip so the same media used twice
@@ -140,6 +144,11 @@ private:
     // Picture of `clip` at sequence time `t` with Motion/Opacity, color, LUT resolved. `t` may be
     // outside the clip (transition handles): the source time is clamped (freeze frame, D19).
     std::optional<render::Layer> layerFor(const model::Clip& clip, const Rational& t);
+    [[nodiscard]] Rational sourceTimeFor(const model::Clip& clip, const model::MediaItem& media, const Rational& t) const;
+    // Decodes the pictures every layer needs at `t` in parallel (one decoder per clip), so a seek
+    // costs the slowest layer instead of the sum; layerFor() then finds them ready.
+    void prefetch(const Rational& t);
+    std::optional<TimedFrame> compose(const Rational& t, bool parallel);
     media::VideoFramePtr titleFrame(const model::Clip& clip, const Rational& sourceTime);
     std::shared_ptr<const render::Lut3D> lutFor(const std::string& path);
 

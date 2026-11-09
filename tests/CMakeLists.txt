@@ -99,6 +99,7 @@ loki_add_test_executable(loki_app_tests
         app/main_window_test.cpp
         ui/audio_panels_test.cpp
         ui/export_dialog_test.cpp
+        ui/robustness_test.cpp
         app/theme_test.cpp
         ui/project_controller_test.cpp
         ui/project_panel_test.cpp

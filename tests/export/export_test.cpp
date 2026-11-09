@@ -79,6 +79,25 @@ TEST_F(ExportTest, EncoderCandidatesAreLgplOnly) {
     EXPECT_EQ(pickEncoder(VideoCodec::ProRes), "prores_ks");
 }
 
+TEST_F(ExportTest, PresetFrameRateResamplesTheTimeline) {
+    auto r = request("h264-1080p60", "60p.mp4");
+    EXPECT_EQ(ExportJob::frameRate(r), Rational(60));
+    EXPECT_EQ(ExportJob::frameCount(r), 60);
+    EXPECT_EQ(ExportJob::outputSize(r), std::make_pair(1920, 1080));
+    const auto* k4 = findExportPreset("h264-4k30");
+    ASSERT_NE(k4, nullptr);
+    EXPECT_EQ(k4->width, 3840);
+    EXPECT_EQ(k4->frameRate, Rational(30));
+    r.encoder = "libopenh264";
+    r.out = Rational(1, 2);
+    r.preset.width = 320; // keep the test fast: same timing, small picture
+    r.preset.height = 240;
+    const auto result = ExportJob(r, cpu()).run();
+    ASSERT_EQ(result.status, ExportStatus::Finished) << result.error;
+    EXPECT_EQ(result.frames, 30);
+    EXPECT_EQ(media::probeMedia(r.file).frameRate, Rational(60));
+}
+
 TEST_F(ExportTest, H264ExportMatchesTheSequence) {
     auto r = request("h264-match", "out.mp4");
     r.encoder = "libopenh264"; // deterministic on every machine

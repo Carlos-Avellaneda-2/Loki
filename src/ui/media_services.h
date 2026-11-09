@@ -50,6 +50,11 @@ public:
     void importPaths(const QStringList& paths, model::BinId bin);
     [[nodiscard]] bool isImporting() const noexcept { return m_importsRunning > 0; }
 
+    // Creates 720p proxies (D24) in the background (cache folder/proxies). When one is ready the
+    // media item's proxyPath is set through an undoable command.
+    void createProxies(const std::vector<model::MediaId>& ids);
+    [[nodiscard]] bool isMakingProxy(model::MediaId id) const;
+
     // Blocks until all background work finished and results were delivered (tests, shutdown).
     void waitForIdle();
 
@@ -58,6 +63,8 @@ signals:
     void waveformReady(const QString& mediaId);
     // imported: number of items added; errors: "<file>: <reason>" lines.
     void importFinished(int imported, const QStringList& errors);
+    void proxyProgress(const QString& mediaId, double progress);
+    void proxyFinished(const QString& mediaId, bool ok, const QString& error);
 
 private:
     struct ImportJob;
@@ -70,6 +77,7 @@ private:
     QHash<QString, std::shared_ptr<const media::Waveform>> m_waveforms;
     QSet<QString> m_pendingWaveforms;
     int m_importsRunning = 0;
+    QSet<QString> m_pendingProxies;
     std::unique_ptr<util::TaskPool> m_pool; // declared last: destroyed (joined) first
 };
 

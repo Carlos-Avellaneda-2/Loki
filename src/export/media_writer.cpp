@@ -60,7 +60,7 @@ void configureVideo(AVCodecContext* c, const AVCodec* codec, const VideoSettings
     c->time_base = av_inv_q(fps);
     c->framerate = fps;
     c->pix_fmt = pickPixelFormat(codec, s.codec);
-    c->gop_size = std::max(1, static_cast<int>(s.frameRate.toDouble() + 0.5)); // ~1 keyframe per second
+    c->gop_size = s.gop > 0 ? s.gop : std::max(1, static_cast<int>(s.frameRate.toDouble() + 0.5)); // ~1 s
     c->max_b_frames = 0;
     c->color_range = AVCOL_RANGE_MPEG;
     c->colorspace = AVCOL_SPC_BT709;
@@ -140,6 +140,7 @@ struct MediaWriter::Impl {
     CodecContextPtr audio;
     AVStream* audioStream = nullptr;
     SwsContextPtr sws;
+    SwsContextPtr frameSws; // decoded pictures (proxies)
     FramePtr picture;
     FramePtr audioFrame;
     std::unique_ptr<AVAudioFifo, void (*)(AVAudioFifo*)> fifo{nullptr, &av_audio_fifo_free};
@@ -275,6 +276,27 @@ void MediaWriter::writeVideo(const std::uint8_t* rgba, int stride) {
     const std::uint8_t* src[1] = {rgba};
     const int srcStride[1] = {stride};
     sws_scale(d.sws.get(), src, srcStride, 0, d.picture->height, d.picture->data, d.picture->linesize);
+    d.picture->pts = d.videoPts++;
+    d.send(d.video.get(), d.videoStream, d.picture.get());
+}
+
+void MediaWriter::writeVideoFrame(const media::VideoFrame& frame) {
+    auto& d = *m_impl;
+    if (!d.video || frame.planeCount == 0) {
+        return;
+    }
+    const AVPixelFormat src = frame.format == media::PixelFormat::Rgba   ? AV_PIX_FMT_RGBA
+                              : frame.format == media::PixelFormat::Nv12 ? AV_PIX_FMT_NV12
+                                                                         : AV_PIX_FMT_YUV420P;
+    d.frameSws.reset(sws_getCachedContext(d.frameSws.release(), frame.width, frame.height, src, d.picture->width,
+                                          d.picture->height, d.video->pix_fmt, SWS_BILINEAR, nullptr, nullptr, nullptr));
+    if (!d.frameSws) {
+        throw MediaError("Cannot convert decoded pictures");
+    }
+    checkFfmpeg(av_frame_make_writable(d.picture.get()), "picture writable");
+    const std::uint8_t* planes[3] = {frame.planes[0].data(), frame.planes[1].data(), frame.planes[2].data()};
+    const int strides[3] = {frame.strides[0], frame.strides[1], frame.strides[2]};
+    sws_scale(d.frameSws.get(), planes, strides, 0, frame.height, d.picture->data, d.picture->linesize);
     d.picture->pts = d.videoPts++;
     d.send(d.video.get(), d.videoStream, d.picture.get());
 }

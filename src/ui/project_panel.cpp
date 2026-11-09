@@ -119,6 +119,16 @@ ProjectPanel::ProjectPanel(ProjectController& controller, MediaServices& service
             menu.addSeparator();
             menu.addAction(tr("Rename"), this, [view, idx] { view->edit(idx.siblingAtColumn(0)); });
             menu.addAction(m_deleteAction);
+            std::vector<model::MediaId> media;
+            for (const auto& row : view->selectionModel()->selectedRows(0)) {
+                if (auto id = m_model->mediaId(row)) {
+                    media.push_back(id);
+                }
+            }
+            if (!media.empty()) {
+                menu.addSeparator();
+                menu.addAction(tr("Create Proxy (720p)"), this, [this, media] { m_services.createProxies(media); });
+            }
         }
         menu.exec(view->viewport()->mapToGlobal(pos));
     };
@@ -131,6 +141,12 @@ ProjectPanel::ProjectPanel(ProjectController& controller, MediaServices& service
         m_icons->setRootIndex({});
         m_upAction->setEnabled(false);
         updateStatus();
+    });
+    connect(&m_services, &MediaServices::proxyProgress, this, [this](const QString&, double p) {
+        m_status->setText(tr("Creating proxy... %1%").arg(static_cast<int>(p * 100)));
+    });
+    connect(&m_services, &MediaServices::proxyFinished, this, [this](const QString&, bool ok, const QString& error) {
+        m_status->setText(ok ? tr("Proxy ready") : tr("Proxy failed: %1").arg(error));
     });
     connect(&m_services, &MediaServices::importFinished, this, [this](int imported, const QStringList& errors) {
         updateStatus();

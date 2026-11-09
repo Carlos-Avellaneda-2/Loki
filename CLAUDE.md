@@ -77,6 +77,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
   - vcpkg `F:\dev\vcpkg` (`VCPKG_ROOT`), caché binaria `F:\dev\vcpkg-cache`
   - Qt `F:\dev\Qt\6.8.3\msvc2022_64` (`LOKI_QT_DIR`), aqt en `F:\dev\tools\aqt.exe`
   - FFmpeg CLI LGPL `F:\dev\ffmpeg\bin`
+  - Inno Setup 6 `F:\dev\InnoSetup` (instalador: `scripts\make-installer.ps1`)
 
 ## Decisiones aprobadas (2026-11-08)
 - C1: Qt precompilado (no vcpkg); ADS vía FetchContent.
@@ -97,11 +98,14 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 8. Audio — audio/mixer puro, SequenceAudioSource multipista (vol/pan clip+pista, mute/solo, master, fades), medidores con reloj, Audio Meters + Audio Track Mixer, línea de volumen y fades en timeline, copiar/cortar/pegar, 313 tests
 - [x] 9. Transiciones, color, títulos — formato v2 (transiciones en pista, medios generados, parámetros texto), disolución/fundido a negro/barrido + crossfade audio, Color/LUT .cube en shader, títulos QtGui, compositor CPU de referencia, panel Efectos, 331 tests
 - [x] 10. Exportación — módulo export (ExportJob, MediaWriter FFmpeg, renderer GPU offscreen + respaldo CPU), encoders LGPL con autodetección (QSV en la máquina del usuario), presets H.264/HEVC/ProRes/WAV, diálogo con progreso/cancelar
-- [ ] 11. Robustez y rendimiento
+- [x] 11. Robustez y rendimiento — proxies 720p (D24), autoguardado + recuperación con QLockFile (D25), workspaces Edición/Color/Audio + de usuario (D26), StallDetector, decodificación paralela en saltos, loki_bench + docs/PERFORMANCE.md, instalador Inno Setup (D27), presets 1080p30/1080p60/4K30, 344 tests
 
 - D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],
   UUID, ruta abs+rel); sin solapes en pista.
 
+- D24–D27 (Fase 11): proxies H.264 720p GOP 15 solo video en caché, toggle de app (no del proyecto), export
+  siempre con originales; recuperación por sesión con lock + copias cada 5 min ×10; workspaces en QSettings;
+  instalador Inno Setup por usuario.
 - D19–D23 (Fases 9/10): transiciones en la pista (corte o borde, alineación, freeze sin handles); formato v2 con
   migración; títulos con QtGui en módulo `loki_text`; compositor CPU de respaldo/referencia; HEVC solo por
   hardware (nunca x265).

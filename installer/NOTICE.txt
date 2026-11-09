@@ -1,0 +1,20 @@
+Loki - editor de video no lineal
+
+Loki se distribuye junto con componentes de terceros, cada uno bajo su propia licencia. Las
+licencias completas que trae cada paquete están en esta carpeta (licenses\).
+
+Bibliotecas LGPL, enlazadas dinámicamente (cada una es una DLL aparte que se puede reemplazar):
+
+- Qt 6.8.3 (Qt GUI, Widgets, OpenGL, Concurrent): LGPL-3.0.
+  Código fuente: https://download.qt.io/archive/qt/6.8/6.8.3/single/
+  Texto de la licencia: https://www.gnu.org/licenses/lgpl-3.0.txt (y https://www.gnu.org/licenses/gpl-3.0.txt)
+- FFmpeg 8 (avcodec, avformat, avutil, swscale, swresample): LGPL-2.1 o posterior, compilado sin
+  componentes GPL ni "nonfree". Licencia completa: ffmpeg.txt.
+- Qt Advanced Docking System 5.1.1: LGPL-2.1. Licencia completa: qtadvanceddocking.txt.
+
+Otros componentes: OpenH264 (BSD-2-Clause; ver la nota de patentes de H.264 en LICENSING.md),
+oneVPL (MIT), AMF (MIT), nv-codec-headers (MIT), spdlog y fmt (MIT), nlohmann/json (MIT),
+miniaudio (dominio público / MIT-0) y zlib (licencia zlib).
+
+Puedes reemplazar las DLL de Qt y FFmpeg por versiones modificadas compatibles: Loki las carga
+desde su carpeta de instalación.

@@ -14,6 +14,8 @@
 #include "ui/effect_controls_panel.h"
 #include "ui/effects_panel.h"
 #include "app/export_dialog.h"
+#include "ui/auto_saver.h"
+#include "ui/stall_detector.h"
 #include "commands/effect_commands.h"
 #include "commands/transition_commands.h"
 #include "ui/program_monitor_panel.h"
@@ -25,6 +27,11 @@
 #include <DockManager.h>
 #include <DockWidget.h>
 
+#include <QDir>
+#include <QFileInfo>
+#include <QLocale>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QAction>
 
 #include <algorithm>
@@ -97,6 +104,23 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
         dockWidget(ui::PanelId::SourceMonitor)->raise();
     });
     m_timeline->setTransport(m_programMonitor->transport());
+    m_stallDetector = new ui::StallDetector(this); // logs UI blocks > 50 ms (performance criterion)
+    m_autoSaver = new ui::AutoSaver(*m_controller, QDir(m_services->cacheDirectory()).filePath(QStringLiteral("autosave")),
+                                    ui::AutoSaver::loadSettings(), this);
+    // Proxy/original toggle shared by both monitors (D24); an app preference, not project data.
+    m_proxyAction = new QAction(tr("Proxy"), this);
+    m_proxyAction->setCheckable(true);
+    m_proxyAction->setToolTip(tr("Toggle Proxies: play 720p proxies where they exist (export always uses originals)"));
+    m_shortcuts->bind(m_proxyAction, QStringLiteral("app.toggleProxies"),
+                      QString::fromLatin1(ui::ShortcutManager::kApplicationContext), QKeySequence());
+    connect(m_proxyAction, &QAction::toggled, this, [this](bool on) {
+        QSettings().setValue(QStringLiteral("playback/useProxies"), on);
+        m_programMonitor->setUseProxies(on);
+        m_sourceMonitor->setUseProxies(on);
+    });
+    m_programMonitor->setProxyAction(m_proxyAction);
+    m_sourceMonitor->setProxyAction(m_proxyAction);
+    m_proxyAction->setChecked(QSettings().value(QStringLiteral("playback/useProxies"), false).toBool());
     // Meters: whatever is playing (Program first, then Source); the mixer follows the sequence.
     m_audioMeters->addSource([this] { return m_programMonitor->engine().levels(); });
     m_audioMeters->addSource([this] { return m_sourceMonitor->engine().levels(); });
@@ -194,6 +218,36 @@ void MainWindow::sourceEdit(model::MediaId media, bool insert) {
     }
 }
 
+void MainWindow::checkForRecovery() {
+    auto orphans = ui::AutoSaver::findOrphans(m_autoSaver->folder());
+    if (orphans.empty()) {
+        return;
+    }
+    std::sort(orphans.begin(), orphans.end(), [](const auto& a, const auto& b) { return a.saved > b.saved; });
+    const auto& newest = orphans.front();
+    const QString name = newest.originalPath.isEmpty() ? tr("an untitled project") : QFileInfo(newest.originalPath).fileName();
+    const auto answer = QMessageBox::question(
+        this, tr("Recover Project"),
+        tr("Loki did not close normally. Unsaved changes to %1 from %2 were recovered.\n\nOpen them now?")
+            .arg(name, QLocale().toString(newest.saved, QLocale::ShortFormat)),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer == QMessageBox::Yes) {
+        const auto recovery = newest;
+        connect(m_controller, &ui::ProjectController::openFinished, this,
+                [recovery](bool ok, const QString&) {
+                    if (ok) {
+                        ui::AutoSaver::discard(recovery);
+                    }
+                },
+                Qt::SingleShotConnection);
+        m_controller->openRecovered(newest.file, newest.originalPath);
+        orphans.erase(orphans.begin());
+    }
+    for (const auto& other : orphans) {
+        ui::AutoSaver::discard(other); // older crashed sessions: their copies remain in the autosave folder
+    }
+}
+
 void MainWindow::exportMedia() {
     if (m_controller->project().findSequence(m_activeSequence) == nullptr) {
         statusBar()->showMessage(tr("No active sequence"), 4000);
@@ -272,7 +326,61 @@ void MainWindow::createDockWidgets() {
         m_docks[indexOf(id)] = dock;
     }
 
+    applyWorkspace(Workspace::Editing);
+}
+
+void MainWindow::showAllPanels() {
+    for (const auto id : ui::kAllPanels) {
+        if (dockWidget(id)->isClosed()) {
+            dockWidget(id)->toggleView(true);
+        }
+    }
+}
+
+void MainWindow::applyWorkspace(Workspace workspace) {
     using ui::PanelId;
+    // Take every panel out, then dock them again in the workspace's arrangement.
+    for (const auto id : ui::kAllPanels) {
+        auto* dock = dockWidget(id);
+        if (dock->dockAreaWidget() != nullptr) {
+            m_dockManager->removeDockWidget(dock);
+        }
+    }
+    if (workspace == Workspace::Color) {
+        //   [ Effect Controls ] [ Program (large)             ]
+        //   [ Project | Effects ] [ Timeline ] [ Audio Meters ]
+        auto* programArea = m_dockManager->addDockWidget(ads::TopDockWidgetArea, dockWidget(PanelId::ProgramMonitor));
+        auto* controlsArea =
+            m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::EffectControls), programArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::SourceMonitor), controlsArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::AudioMixer), controlsArea);
+        controlsArea->setCurrentDockWidget(dockWidget(PanelId::EffectControls));
+        auto* timelineArea = m_dockManager->addDockWidget(ads::BottomDockWidgetArea, dockWidget(PanelId::Timeline));
+        auto* effectsArea = m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Effects), timelineArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Project), effectsArea);
+        effectsArea->setCurrentDockWidget(dockWidget(PanelId::Effects));
+        m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
+        m_dockManager->setSplitterSizes(programArea, {350, 950});
+        showAllPanels();
+        return;
+    }
+    if (workspace == Workspace::Audio) {
+        //   [ Audio Track Mixer | Source ] [ Program ]
+        //   [ Project | Effects ] [ Timeline ] [ Audio Meters (wide) ]
+        auto* mixerArea = m_dockManager->addDockWidget(ads::TopDockWidgetArea, dockWidget(PanelId::AudioMixer));
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::SourceMonitor), mixerArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::EffectControls), mixerArea);
+        mixerArea->setCurrentDockWidget(dockWidget(PanelId::AudioMixer));
+        m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::ProgramMonitor), mixerArea);
+        auto* timelineArea = m_dockManager->addDockWidget(ads::BottomDockWidgetArea, dockWidget(PanelId::Timeline));
+        auto* projectArea = m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Project), timelineArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Effects), projectArea);
+        projectArea->setCurrentDockWidget(dockWidget(PanelId::Project));
+        m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
+        m_dockManager->setSplitterSizes(timelineArea, {250, 800, 250});
+        showAllPanels();
+        return;
+    }
     // Default "Editing" workspace, Premiere-like:
     //   [ Source | Effect Controls | Audio Track Mixer (tabs) ] [ Program ]
     //   [ Project ] [ Timeline                    ] [ Audio Meters ]
@@ -290,6 +398,7 @@ void MainWindow::createDockWidgets() {
     sourceArea->setCurrentDockWidget(dockWidget(PanelId::SourceMonitor));
     // Relative widths of the bottom row (Project | Timeline | Audio Meters); QSplitter rescales them.
     m_dockManager->setSplitterSizes(timelineArea, {300, 900, 150});
+    showAllPanels();
 }
 
 QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
@@ -385,14 +494,73 @@ void MainWindow::createMenus() {
     auto* preferences = editMenu->addAction(tr("&Preferences..."));
     preferences->setMenuRole(QAction::PreferencesRole);
     connect(preferences, &QAction::triggered, this, [this] {
-        PreferencesDialog dialog(*m_services, this);
+        PreferencesDialog dialog(*m_services, m_autoSaver, this);
         dialog.exec();
     });
 
     auto* windowMenu = menuBar()->addMenu(tr("&Window"));
+    m_workspaceMenu = windowMenu->addMenu(tr("&Workspaces"));
+    rebuildWorkspaceMenu();
+    windowMenu->addSeparator();
     for (const auto id : ui::kAllPanels) {
         windowMenu->addAction(dockWidget(id)->toggleViewAction());
     }
+}
+
+void MainWindow::rebuildWorkspaceMenu() {
+    m_workspaceMenu->clear();
+    const std::pair<Workspace, QString> builtIn[] = {
+        {Workspace::Editing, tr("Editing")}, {Workspace::Color, tr("Color")}, {Workspace::Audio, tr("Audio")}};
+    for (const auto& [w, label] : builtIn) {
+        m_workspaceMenu->addAction(label, this, [this, w = w] { applyWorkspace(w); });
+    }
+    const auto saved = savedWorkspaces();
+    if (!saved.isEmpty()) {
+        m_workspaceMenu->addSeparator();
+        for (const auto& name : saved) {
+            m_workspaceMenu->addAction(name, this, [this, name] { applySavedWorkspace(name); });
+        }
+    }
+    m_workspaceMenu->addSeparator();
+    m_workspaceMenu->addAction(tr("Save as New Workspace..."), this, [this] {
+        bool ok = false;
+        const auto name = QInputDialog::getText(this, tr("New Workspace"), tr("Name:"), QLineEdit::Normal, QString(), &ok);
+        if (ok && !name.trimmed().isEmpty()) {
+            saveWorkspace(name.trimmed());
+        }
+    });
+    if (!saved.isEmpty()) {
+        auto* remove = m_workspaceMenu->addMenu(tr("Delete Workspace"));
+        for (const auto& name : saved) {
+            remove->addAction(name, this, [this, name] { deleteWorkspace(name); });
+        }
+    }
+}
+
+QStringList MainWindow::savedWorkspaces() {
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("workspaces"));
+    auto names = settings.childKeys();
+    names.sort(Qt::CaseInsensitive);
+    return names;
+}
+
+bool MainWindow::saveWorkspace(const QString& name) {
+    if (name.isEmpty()) {
+        return false;
+    }
+    QSettings().setValue(QStringLiteral("workspaces/") + name, saveLayout());
+    rebuildWorkspaceMenu();
+    return true;
+}
+
+bool MainWindow::applySavedWorkspace(const QString& name) {
+    return restoreLayout(QSettings().value(QStringLiteral("workspaces/") + name).toByteArray());
+}
+
+void MainWindow::deleteWorkspace(const QString& name) {
+    QSettings().remove(QStringLiteral("workspaces/") + name);
+    rebuildWorkspaceMenu();
 }
 
 void MainWindow::updateTitle() {

@@ -27,6 +27,7 @@ struct ExportPreset {
     int width = 0;  // 0 = sequence size
     int height = 0;
     std::int64_t videoBitRate = 0; // 0 = from the output size
+    Rational frameRate;            // 0 = sequence frame rate
 };
 [[nodiscard]] const std::vector<ExportPreset>& exportPresets();
 [[nodiscard]] const ExportPreset* findExportPreset(const std::string& id);
@@ -95,6 +96,7 @@ public:
     // Output size and frame count for a request (also used by the dialog).
     [[nodiscard]] static std::pair<int, int> outputSize(const ExportRequest& request);
     [[nodiscard]] static std::int64_t frameCount(const ExportRequest& request);
+    [[nodiscard]] static Rational frameRate(const ExportRequest& request);
 
 private:
     ExportRequest m_request;

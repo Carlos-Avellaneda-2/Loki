@@ -9,6 +9,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <future>
 
 namespace loki::playback {
 
@@ -94,6 +95,16 @@ SequenceVideoSource::SequenceVideoSource(std::shared_ptr<const SequenceSnapshot>
 
 SequenceVideoSource::~SequenceVideoSource() = default;
 
+std::filesystem::path videoPathFor(const model::MediaItem& media, bool useProxies) {
+    if (useProxies && media.proxyPath) {
+        std::error_code ec;
+        if (std::filesystem::exists(*media.proxyPath, ec)) {
+            return *media.proxyPath;
+        }
+    }
+    return media.path;
+}
+
 media::VideoDecoder* SequenceVideoSource::decoderFor(const model::Clip& clip, const model::MediaItem& media) {
     if (m_offline.contains(media.id)) {
         return nullptr;
@@ -109,7 +120,8 @@ media::VideoDecoder* SequenceVideoSource::decoderFor(const model::Clip& clip, co
         options.allowHardware = m_allowHardware && !media.info.isStill;
         options.maxWidth = m_maxWidth;
         options.maxHeight = m_maxHeight;
-        m_decoders.emplace_front(clip.id, std::make_unique<media::VideoDecoder>(media.path, options));
+        m_decoders.emplace_front(clip.id,
+                                 std::make_unique<media::VideoDecoder>(videoPathFor(media, m_snapshot->useProxies), options));
     } catch (const std::exception& e) {
         spdlog::warn("Media offline for playback ({}): {}", model::pathToUtf8(media.path), e.what());
         m_offline.insert(media.id);
@@ -161,6 +173,59 @@ media::VideoFramePtr SequenceVideoSource::titleFrame(const model::Clip& clip, co
     return cached.frame;
 }
 
+Rational SequenceVideoSource::sourceTimeFor(const model::Clip& clip, const model::MediaItem& media,
+                                            const Rational& t) const {
+    Rational sourceTime = max(Rational(), clip.toSourceTime(t));
+    if (!media.isGenerated() && !media.info.isStill && media.info.duration.isPositive() &&
+        sourceTime >= media.info.duration) {
+        sourceTime = max(Rational(), media.info.duration - m_frameDuration); // freeze the last frame
+    }
+    return sourceTime;
+}
+
+void SequenceVideoSource::prefetch(const Rational& t) {
+    std::vector<std::pair<media::VideoDecoder*, Rational>> work;
+    const auto want = [&](const model::Clip* clip) {
+        if (clip == nullptr || !clip->enabled) {
+            return;
+        }
+        const auto media = m_snapshot->media.find(clip->media);
+        if (media == m_snapshot->media.end() || !media->second.info.hasVideo || media->second.isGenerated()) {
+            return;
+        }
+        if (auto* decoder = decoderFor(*clip, media->second)) {
+            work.emplace_back(decoder, sourceTimeFor(*clip, media->second, t));
+        }
+    };
+    for (const auto& track : m_snapshot->sequence.videoTracks) {
+        if (track.state.hidden) {
+            continue;
+        }
+        if (const auto active = model::activeTransition(track, t)) {
+            want(active->span.from);
+            want(active->span.to);
+            continue;
+        }
+        const auto clip = std::find_if(track.clips.begin(), track.clips.end(),
+                                       [&](const model::Clip& c) { return c.start <= t && t < c.end(); });
+        if (clip != track.clips.end()) {
+            want(&*clip);
+        }
+    }
+    if (work.size() < 2 || work.size() > kMaxOpenVideoDecoders) {
+        return; // nothing to overlap (or the decoder LRU could evict one we hold)
+    }
+    // Each decoder belongs to one clip, so they can run concurrently; the first stays on this thread.
+    std::vector<std::future<void>> others;
+    for (std::size_t i = 1; i < work.size(); ++i) {
+        others.push_back(std::async(std::launch::async, [job = work[i]] { (void)job.first->frameAt(job.second); }));
+    }
+    (void)work.front().first->frameAt(work.front().second);
+    for (auto& f : others) {
+        f.get();
+    }
+}
+
 std::optional<render::Layer> SequenceVideoSource::layerFor(const model::Clip& clip, const Rational& t) {
     if (!clip.enabled) {
         return std::nullopt;
@@ -171,11 +236,7 @@ std::optional<render::Layer> SequenceVideoSource::layerFor(const model::Clip& cl
     }
     const auto& media = mediaIt->second;
     const auto& seq = m_snapshot->sequence;
-    Rational sourceTime = max(Rational(), clip.toSourceTime(t));
-    if (!media.isGenerated() && !media.info.isStill && media.info.duration.isPositive() &&
-        sourceTime >= media.info.duration) {
-        sourceTime = max(Rational(), media.info.duration - m_frameDuration); // freeze the last frame
-    }
+    const Rational sourceTime = sourceTimeFor(clip, media, t);
     render::Layer layer;
     if (media.generator == model::kTitleGenerator) {
         layer.frame = titleFrame(clip, sourceTime);
@@ -214,10 +275,19 @@ std::optional<render::Layer> SequenceVideoSource::layerFor(const model::Clip& cl
 }
 
 std::optional<TimedFrame> SequenceVideoSource::frameAt(const Rational& requested) {
+    // Seeks/scrubs: decode the layers in parallel. Sequential playback (nextFrame) does not, so it
+    // never competes with the audio thread for the CPU.
+    return compose(requested, true);
+}
+
+std::optional<TimedFrame> SequenceVideoSource::compose(const Rational& requested, bool parallel) {
     const auto& seq = m_snapshot->sequence;
     const Rational t = quantizeToFrame(max(Rational(), requested), seq.settings.frameRate, Rounding::Floor);
     if (t >= seq.duration()) {
         return std::nullopt;
+    }
+    if (parallel) {
+        prefetch(t);
     }
     auto composite = std::make_shared<render::CompositeFrame>();
     composite->width = seq.settings.width;
@@ -288,7 +358,7 @@ void SequenceVideoSource::seek(const Rational& t) {
 }
 
 std::optional<TimedFrame> SequenceVideoSource::nextFrame() {
-    auto f = frameAt(m_next);
+    auto f = compose(m_next, false);
     m_next += m_frameDuration;
     return f;
 }
@@ -302,7 +372,7 @@ std::vector<TimedFrame> SequenceVideoSource::framesUpTo(const Rational& t) {
     }
     // Ascending order keeps each clip decoder moving forward (one seek per run).
     for (Rational at = start; at <= end; at += m_frameDuration) {
-        if (auto f = frameAt(at)) {
+        if (auto f = compose(at, false)) {
             out.push_back(std::move(*f));
         }
     }
@@ -364,7 +434,7 @@ bool sameExceptAudioMix(const SequenceSnapshot& a, const SequenceSnapshot& b) {
         }
         return seq;
     };
-    return normalized(a.sequence) == normalized(b.sequence);
+    return a.useProxies == b.useProxies && normalized(a.sequence) == normalized(b.sequence);
 }
 
 SequenceAudioSource::SequenceAudioSource(std::shared_ptr<const SequenceSnapshot> snapshot, int sampleRate, int channels)

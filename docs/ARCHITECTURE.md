@@ -416,7 +416,42 @@ Implementado en la Fase 10 (D22, D23), en el módulo `export` (namespace `loki::
 
 ## 9. Persistencia y robustez
 
+Implementado en la Fase 11 (D24–D27).
+
 - Proyecto `.loki` (JSON, `version`), escritura atómica (archivo temporal + rename).
-- Autoguardado configurable + archivo de recuperación; al arrancar, si existe recuperación más nueva que el
-  proyecto, se ofrece restaurarla.
-- Workspaces: `QMainWindow::saveState` / ADS `saveState` por workspace (Edición, Color, Audio).
+- Recuperación y autoguardado (`ui::AutoSaver`, D25):
+  - Archivo de recuperación:
+    - Unos 2 s después de cada cambio se escribe `session-<uuid>.loki` (más un `.json` con la ruta original)
+      en `<caché>/autosave`.
+    - Se serializa en el hilo de UI y se escribe en disco en un worker.
+    - Cada instancia mantiene `session-<uuid>.lock` con `QLockFile`.
+    - El archivo se borra al guardar o al salir bien.
+  - Después de un crash el lock queda libre o vencido. `findOrphans` lo detecta al arrancar y
+    `MainWindow::checkForRecovery` ofrece abrirlo con `ProjectController::openRecovered`. El proyecto se abre con la
+    ruta original y marcado como modificado.
+  - Copias periódicas `<proyecto>-yyyyMMdd-HHmmss.loki` (5 min, 10 versiones), configurables en Preferencias.
+- Proxies (D24):
+  - `exporter::makeProxy` genera H.264 de 720p como máximo, con GOP 15 y solo video, en `<caché>/proxies`. La ruta
+    se guarda en `MediaItem::proxyPath` con un comando.
+  - Se crean desde el menú contextual del panel Project, en el pool de tareas.
+  - `playback::videoPathFor` decide si se lee el proxy o el original:
+    - `SequenceSnapshot::useProxies` en el Monitor de Programa.
+    - `PlaybackEngine::open(..., videoPath)` en el de Origen: el sonido sale siempre del original.
+  - La geometría usa siempre el tamaño del original, así que el cambio es transparente.
+  - La exportación nunca usa proxies.
+  - El botón Proxy de los monitores comparte un `QAction` y se guarda en QSettings.
+- Workspaces (D26):
+  - Edición, Color y Audio se arman por código (`MainWindow::applyWorkspace`): se quitan todos los paneles y se
+    vuelven a acoplar.
+  - Los workspaces del usuario guardan `saveState` de ADS en QSettings (`workspaces/<nombre>`).
+- Rendimiento:
+  - `ui::StallDetector` registra en el log los bloqueos del hilo de UI de más de 50 ms.
+  - En los saltos y el scrubbing, `SequenceVideoSource` decodifica las capas en paralelo (`prefetch`). La
+    reproducción secuencial no, para no quitarle CPU al audio.
+  - `loki_bench` mide los criterios y escribe `docs/PERFORMANCE.md`.
+- Instalador (D27): `scripts/make-installer.ps1`:
+  - Compila en Release.
+  - `windeployqt` copia Qt como DLL (LGPL); se suman las DLL de vcpkg y ADS y el runtime MSVC.
+  - Copia las licencias.
+  - Inno Setup genera `build/installer/Loki-<versión>-setup.exe`: por usuario y sin admin, con asociación de
+    `.loki`.

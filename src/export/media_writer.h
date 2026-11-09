@@ -1,5 +1,6 @@
 #pragma once
 
+#include "media/video_frame.h"
 #include "util/rational.h"
 
 #include <cstdint>
@@ -21,6 +22,7 @@ struct VideoSettings {
     std::int64_t bitRate = 16'000'000; // H.264/HEVC target (bits per second)
     // Encoder name to use ("h264_qsv", "libopenh264", ...); empty = best available (see encoders.h).
     std::string encoder;
+    int gop = 0; // keyframe interval in frames; 0 = one per second
 };
 
 struct AudioSettings {
@@ -44,6 +46,8 @@ public:
 
     // Next video frame: width*height*4 bytes, rows top to bottom.
     void writeVideo(const std::uint8_t* rgba, int stride);
+    // Next video frame from a decoded picture (any size/format: scaled and converted).
+    void writeVideoFrame(const media::VideoFrame& frame);
     // Interleaved float samples (frames * channels).
     void writeAudio(const float* samples, std::size_t frames);
     // Flushes encoders and writes the trailer. Must be called once for a valid file.

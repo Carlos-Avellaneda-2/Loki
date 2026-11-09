@@ -4,6 +4,10 @@ add_library(loki_ui STATIC
     audio_mixer_panel.h
     audio_mixer_panel.cpp
     audio_scale.h
+    auto_saver.h
+    auto_saver.cpp
+    stall_detector.h
+    stall_detector.cpp
     effect_controls_panel.h
     effect_controls_panel.cpp
     effects_panel.h
@@ -43,5 +47,5 @@ add_library(loki_ui STATIC
 add_library(loki::ui ALIAS loki_ui)
 
 target_include_directories(loki_ui PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(loki_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::OpenGLWidgets loki::commands loki::media loki::playback loki::render loki::model loki::util)
+target_link_libraries(loki_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::OpenGLWidgets loki::commands loki::export loki::media loki::playback loki::render loki::model loki::util)
 loki_set_warnings(loki_ui)

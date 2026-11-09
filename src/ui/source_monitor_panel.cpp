@@ -9,6 +9,7 @@
 #include "ui/video_view.h"
 #include "util/timecode.h"
 
+#include <QAction>
 #include <QComboBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -96,6 +97,7 @@ SourceMonitorPanel::SourceMonitorPanel(ProjectController& controller, MediaServi
     });
 
     auto* info = new QHBoxLayout();
+    m_info = info;
     info->addWidget(m_timecode);
     info->addStretch();
     info->addWidget(m_quality);
@@ -202,7 +204,7 @@ void SourceMonitorPanel::loadMedia(model::MediaId id) {
     }
     m_media = id;
     m_title->setText(qs(item->name));
-    m_engine->open(item->path, item->info);
+    m_engine->open(item->path, item->info, playback::videoPathFor(*item, m_useProxies));
     m_scrub->setTiming(item->info.duration, item->info.frameRate.isPositive() ? item->info.frameRate : Rational(30));
     refreshMarks();
     if (item->markIn) {
@@ -344,6 +346,27 @@ void SourceMonitorPanel::dropEvent(QDropEvent* event) {
     if (!ids.empty()) {
         loadMedia(ids.front());
         event->acceptProposedAction();
+    }
+}
+
+void SourceMonitorPanel::setProxyAction(QAction* action) {
+    auto* button = new QToolButton(this);
+    button->setDefaultAction(action);
+    button->setAutoRaise(true);
+    m_info->insertWidget(m_info->indexOf(m_quality), button);
+}
+
+void SourceMonitorPanel::setUseProxies(bool on) {
+    if (m_useProxies == on) {
+        return;
+    }
+    m_useProxies = on;
+    if (m_media) {
+        const auto position = m_engine->position();
+        const auto id = m_media;
+        m_media = {};
+        loadMedia(id);
+        m_engine->seek(position);
     }
 }
 

@@ -7,6 +7,8 @@
 #include <QFutureWatcher>
 #include <QMetaType>
 #include <QObject>
+
+#include <optional>
 #include <QString>
 
 #include <memory>
@@ -50,10 +52,13 @@ public:
     // Asynchronous; result reported by saveFinished. Returns false if busy or no file path.
     bool saveProject();
     bool saveProjectAs(const QString& path);
+    // Opens a crash-recovery file (D25) as `originalPath` (empty = untitled), marked as modified so
+    // the user saves it over the original. Asynchronous like openProject.
+    bool openRecovered(const QString& recoveryFile, const QString& originalPath);
 
     [[nodiscard]] QString filePath() const { return m_filePath; }
     [[nodiscard]] QString displayName() const;
-    [[nodiscard]] bool isModified() const noexcept { return !m_undoStack.isClean(); }
+    [[nodiscard]] bool isModified() const noexcept { return !m_undoStack.isClean() || m_forceModified; }
     [[nodiscard]] bool isBusy() const noexcept { return m_saveWatcher.isRunning() || m_loadWatcher.isRunning(); }
     // Blocks until a pending load/save finished and its result was applied (tests, shutdown).
     void waitForPendingIo();
@@ -87,6 +92,8 @@ private:
     QAction* m_redoAction = nullptr; // owned (Qt parent)
     QString m_filePath;
     bool m_lastModified = false;
+    bool m_forceModified = false;  // recovered project: unsaved until saved
+    std::optional<QString> m_recoveredPath; // pending openRecovered target
     commands::GestureId m_nextGesture = 1;
 
     QFutureWatcher<QString> m_saveWatcher; // result: empty = success, otherwise error message

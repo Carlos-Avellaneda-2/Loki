@@ -67,7 +67,9 @@ public:
     PlaybackEngine& operator=(PlaybackEngine&&) = delete;
 
     // Asynchronous. `info` comes from the project (probe); errors are reported by lastError().
-    void open(const std::filesystem::path& path, const model::MediaInfo& info);
+    // `videoPath` (proxy, D24) replaces `path` for pictures only; sound always comes from `path`.
+    void open(const std::filesystem::path& path, const model::MediaInfo& info,
+              const std::filesystem::path& videoPath = {});
     // Plays a sequence. Calling it again with a newer snapshot of the same sequence keeps the
     // position and transport state (live update after edits).
     void openSequence(std::shared_ptr<const SequenceSnapshot> snapshot);
@@ -115,6 +117,7 @@ private:
     struct FileRequest {
         std::filesystem::path path;
         model::MediaInfo info;
+        std::filesystem::path videoPath;
     };
     struct Requests {
         std::variant<std::monostate, FileRequest, std::shared_ptr<const SequenceSnapshot>> open;

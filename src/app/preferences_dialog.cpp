@@ -1,8 +1,10 @@
 #include "app/preferences_dialog.h"
 
 #include "media/media_cache.h"
+#include "ui/auto_saver.h"
 #include "ui/media_services.h"
 
+#include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
@@ -13,12 +15,13 @@
 #include <QLocale>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QVBoxLayout>
 
 namespace loki::app {
 
-PreferencesDialog::PreferencesDialog(ui::MediaServices& services, QWidget* parent)
-    : QDialog(parent), m_services(services) {
+PreferencesDialog::PreferencesDialog(ui::MediaServices& services, ui::AutoSaver* autoSaver, QWidget* parent)
+    : QDialog(parent), m_services(services), m_autoSaver(autoSaver) {
     setWindowTitle(tr("Preferences"));
     setMinimumWidth(520);
 
@@ -37,6 +40,21 @@ PreferencesDialog::PreferencesDialog(ui::MediaServices& services, QWidget* paren
     auto* form = new QFormLayout();
     form->addRow(tr("Media Cache folder:"), row);
     form->addRow(QString(), usageRow);
+
+    // Autosave (D25).
+    const auto autosave = ui::AutoSaver::loadSettings();
+    m_autosave = new QCheckBox(tr("Automatically save projects and keep a crash-recovery copy"), this);
+    m_autosave->setChecked(autosave.enabled);
+    m_interval = new QSpinBox(this);
+    m_interval->setRange(1, 120);
+    m_interval->setSuffix(tr(" min"));
+    m_interval->setValue(autosave.intervalMinutes);
+    m_keep = new QSpinBox(this);
+    m_keep->setRange(1, 100);
+    m_keep->setValue(autosave.keep);
+    form->addRow(tr("Auto Save:"), m_autosave);
+    form->addRow(tr("Save every:"), m_interval);
+    form->addRow(tr("Versions to keep:"), m_keep);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     auto* layout = new QVBoxLayout(this);
@@ -73,6 +91,14 @@ void PreferencesDialog::accept() {
     if (dir.isEmpty() || !QDir().mkpath(dir)) {
         QMessageBox::warning(this, tr("Preferences"), tr("The Media Cache folder cannot be created."));
         return;
+    }
+    ui::AutoSaver::Settings autosave;
+    autosave.enabled = m_autosave->isChecked();
+    autosave.intervalMinutes = m_interval->value();
+    autosave.keep = m_keep->value();
+    ui::AutoSaver::saveSettings(autosave);
+    if (m_autoSaver != nullptr) {
+        m_autoSaver->setSettings(autosave);
     }
     if (dir != QDir::cleanPath(m_services.cacheDirectory())) {
         ui::setConfiguredCacheDirectory(dir);

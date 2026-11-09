@@ -9,11 +9,15 @@
 #include <array>
 #include <cstddef>
 
+class QAction;
 class QCloseEvent;
+class QMenu;
 class QSettings;
 
 namespace loki::ui {
 class AudioMetersPanel;
+class AutoSaver;
+class StallDetector;
 class EffectsPanel;
 class AudioMixerPanel;
 class MediaServices;
@@ -75,10 +79,23 @@ public:
     [[nodiscard]] ui::AudioMetersPanel* audioMeters() const noexcept { return m_audioMeters; }
     [[nodiscard]] ui::AudioMixerPanel* audioMixer() const noexcept { return m_audioMixer; }
     [[nodiscard]] ui::EffectsPanel* effectsPanel() const noexcept { return m_effects; }
+    [[nodiscard]] QAction* proxyAction() const noexcept { return m_proxyAction; }
     // File > New > Title: a title clip at the Program playhead on the targeted video track.
     void newTitle();
     // File > Export > Media (Ctrl+M).
     void exportMedia();
+    [[nodiscard]] ui::AutoSaver* autoSaver() const noexcept { return m_autoSaver; }
+    [[nodiscard]] ui::StallDetector* stallDetector() const noexcept { return m_stallDetector; }
+    // Offers to restore projects of sessions that crashed (D25). Called once after startup.
+    void checkForRecovery();
+
+    // Workspaces (D26): built-in Editing / Color / Audio layouts and user-saved ones (QSettings).
+    enum class Workspace { Editing, Color, Audio };
+    void applyWorkspace(Workspace workspace);
+    bool saveWorkspace(const QString& name);
+    bool applySavedWorkspace(const QString& name);
+    void deleteWorkspace(const QString& name);
+    [[nodiscard]] static QStringList savedWorkspaces();
     [[nodiscard]] model::SequenceId activeSequence() const noexcept { return m_activeSequence; }
     // Insert/Overwrite from the Source Monitor at the Program playhead (public for tests).
     void sourceEdit(model::MediaId media, bool insert);
@@ -89,6 +106,8 @@ protected:
 private:
     void createDockWidgets();
     void createMenus();
+    void rebuildWorkspaceMenu();
+    void showAllPanels();
     QWidget* createPanelWidget(ui::PanelId id);
     void activateFirstSequence();
     void updateTitle();
@@ -110,6 +129,10 @@ private:
     ui::AudioMetersPanel* m_audioMeters = nullptr;      // owned by its dock widget
     ui::AudioMixerPanel* m_audioMixer = nullptr;        // owned by its dock widget
     ui::EffectsPanel* m_effects = nullptr;              // owned by its dock widget
+    QAction* m_proxyAction = nullptr;                   // owned by this window (Qt parent)
+    ui::AutoSaver* m_autoSaver = nullptr;               // owned by this window (Qt parent)
+    ui::StallDetector* m_stallDetector = nullptr;       // owned by this window (Qt parent)
+    QMenu* m_workspaceMenu = nullptr;                   // owned by the menu bar
     model::SequenceId m_activeSequence;
     playback::PlaybackOptions m_playbackOptions;
     ads::CDockManager* m_dockManager = nullptr;    // owned by this window (Qt parent)

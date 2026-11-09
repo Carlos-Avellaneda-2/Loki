@@ -19,8 +19,10 @@ namespace loki::exporter {
 const std::vector<ExportPreset>& exportPresets() {
     static const std::vector<ExportPreset> kPresets = {
         {"h264-match", "H.264 - Match Sequence", ".mp4", VideoCodec::H264, AudioCodec::Aac, 0, 0, 0},
-        {"h264-1080p", "H.264 - 1080p High Quality", ".mp4", VideoCodec::H264, AudioCodec::Aac, 1920, 1080, 16'000'000},
-        {"h264-720p", "H.264 - 720p", ".mp4", VideoCodec::H264, AudioCodec::Aac, 1280, 720, 8'000'000},
+        {"h264-1080p30", "H.264 - 1080p30", ".mp4", VideoCodec::H264, AudioCodec::Aac, 1920, 1080, 16'000'000, Rational(30)},
+        {"h264-1080p60", "H.264 - 1080p60", ".mp4", VideoCodec::H264, AudioCodec::Aac, 1920, 1080, 24'000'000, Rational(60)},
+        {"h264-4k30", "H.264 - 4K UHD 30", ".mp4", VideoCodec::H264, AudioCodec::Aac, 3840, 2160, 45'000'000, Rational(30)},
+        {"h264-720p", "H.264 - 720p", ".mp4", VideoCodec::H264, AudioCodec::Aac, 1280, 720, 8'000'000, {}},
         {"hevc-match", "HEVC (hardware) - Match Sequence", ".mp4", VideoCodec::Hevc, AudioCodec::Aac, 0, 0, 0},
         {"prores-hq", "ProRes 422 HQ (.mov)", ".mov", VideoCodec::ProRes, AudioCodec::Pcm, 0, 0, 0},
         {"wav", "WAV - Audio Only", ".wav", VideoCodec::None, AudioCodec::Pcm, 0, 0, 0},
@@ -130,8 +132,13 @@ std::pair<int, int> ExportJob::outputSize(const ExportRequest& request) {
     return {w - w % 2, h - h % 2}; // encoders need even sizes
 }
 
+Rational ExportJob::frameRate(const ExportRequest& request) {
+    return request.preset.frameRate.isPositive() ? request.preset.frameRate
+                                                 : request.snapshot->sequence.settings.frameRate;
+}
+
 std::int64_t ExportJob::frameCount(const ExportRequest& request) {
-    const auto rate = request.snapshot->sequence.settings.frameRate;
+    const auto rate = frameRate(request);
     return std::max<std::int64_t>(0, timeToFrames(request.out - request.in, rate, Rounding::Ceil));
 }
 
@@ -139,7 +146,7 @@ ExportResult ExportJob::run() {
     ExportResult result;
     const auto started = std::chrono::steady_clock::now();
     const auto& seq = m_request.snapshot->sequence;
-    const auto rate = seq.settings.frameRate;
+    const auto rate = frameRate(m_request); // a preset may resample the timeline (1080p60 from a 30p sequence)
     const auto [width, height] = outputSize(m_request);
     const auto frames = frameCount(m_request);
     const bool hasVideo = m_request.preset.video != VideoCodec::None;

@@ -50,11 +50,12 @@ PlaybackEngine::~PlaybackEngine() {
 
 // --- UI-thread API ---------------------------------------------------------------------------
 
-void PlaybackEngine::open(const std::filesystem::path& path, const model::MediaInfo& info) {
+void PlaybackEngine::open(const std::filesystem::path& path, const model::MediaInfo& info,
+                          const std::filesystem::path& videoPath) {
     {
         std::lock_guard lock(m_requestMutex);
         m_requests = {};
-        m_requests.open = FileRequest{path, info};
+        m_requests.open = FileRequest{path, info, videoPath};
         m_pending = true;
     }
     m_requestedRate = 0;
@@ -365,7 +366,8 @@ void PlaybackEngine::doOpenFile(const FileRequest& request) {
     Rational decoderRate;
     try {
         if (request.info.hasVideo) {
-            auto video = std::make_unique<FileVideoSource>(request.path, m_options.allowHardware && !request.info.isStill,
+            auto video = std::make_unique<FileVideoSource>(request.videoPath.empty() ? request.path : request.videoPath,
+                                                           m_options.allowHardware && !request.info.isStill,
                                                            m_maxWidth, m_maxHeight);
             decoderRate = video->frameRate();
             m_video = std::move(video);

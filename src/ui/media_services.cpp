@@ -1,6 +1,9 @@
 #include "ui/media_services.h"
 
 #include "commands/project_commands.h"
+#include "export/proxy.h"
+
+#include "commands/project_commands.h"
 #include "media/media_probe.h"
 #include "media/thumbnail.h"
 #include "model/project_json.h"
@@ -151,6 +154,45 @@ QImage MediaServices::thumbnail(const model::MediaItem& item) {
         },
         util::TaskPriority::Background);
     return {};
+}
+
+void MediaServices::createProxies(const std::vector<model::MediaId>& ids) {
+    for (const auto id : ids) {
+        const auto* found = m_controller.project().findMedia(id);
+        const auto key = idKey(id);
+        if (found == nullptr || !exporter::canHaveProxy(*found) || m_pendingProxies.contains(key)) {
+            continue;
+        }
+        m_pendingProxies.insert(key);
+        const model::MediaItem item = *found;
+        const auto output = exporter::proxyPathFor(m_cache->root(), id);
+        m_pool->submit(
+            [this, key, item, output](const util::CancelToken& cancel) {
+                std::atomic<bool> stop{false};
+                const auto result = exporter::makeProxy(item, output, &stop, [&](double p) {
+                    if (cancel.cancelled()) {
+                        stop = true;
+                    }
+                    QMetaObject::invokeMethod(this, [this, key, p] { emit proxyProgress(key, p); }, Qt::QueuedConnection);
+                });
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, key, id = item.id, output, result] {
+                        m_pendingProxies.remove(key);
+                        if (result.ok && m_controller.project().findMedia(id) != nullptr) {
+                            m_controller.execute(std::make_unique<commands::EditMediaCommand>(
+                                id, "Create Proxy", [output](model::MediaItem& m) { m.proxyPath = output; }));
+                        }
+                        emit proxyFinished(key, result.ok, QString::fromStdString(result.error));
+                    },
+                    Qt::QueuedConnection);
+            },
+            util::TaskPriority::Background);
+    }
+}
+
+bool MediaServices::isMakingProxy(model::MediaId id) const {
+    return m_pendingProxies.contains(idKey(id));
 }
 
 std::shared_ptr<const media::Waveform> MediaServices::waveform(const model::MediaItem& item) {

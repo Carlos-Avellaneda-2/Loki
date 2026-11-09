@@ -33,3 +33,24 @@ Presets disponibles:
 - Qt ADS se descarga y compila con `FetchContent` y queda como DLL en `build/<preset>/bin`.
 - Los logs se escriben en `%LOCALAPPDATA%\Loki\Loki\logs\loki.log`.
 - La disposición de paneles se guarda al salir, en el registro (`HKCU\Software\Loki\Loki`).
+
+## Benchmark de rendimiento
+
+```
+cmake --build --preset windows-msvc-release --target loki_bench
+.\build\windows-msvc-release\bin\loki_bench.exe docs\PERFORMANCE.md --seconds 10
+```
+
+Necesita GPU con OpenGL 3.3 y un dispositivo de audio. Genera su propio medio 1080p30 en `%TEMP%\loki_bench`.
+
+## Instalador de Windows
+
+Requiere Inno Setup 6 en `F:\dev\InnoSetup` (se instaló con `winget install JRSoftware.InnoSetup --location
+F:\dev\InnoSetup --scope user`).
+
+```
+.\scripts\make-installer.ps1            # compila Release, prepara build\installer\stage y crea el setup
+.\scripts\make-installer.ps1 -SkipBuild
+```
+
+Resultado: `build\installer\Loki-<versión>-setup.exe`, de unos 22 MB.

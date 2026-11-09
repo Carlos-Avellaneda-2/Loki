@@ -6,6 +6,8 @@ add_library(loki_export STATIC
     export_job.cpp
     media_writer.h
     media_writer.cpp
+    proxy.h
+    proxy.cpp
 )
 add_library(loki::export ALIAS loki_export)
 

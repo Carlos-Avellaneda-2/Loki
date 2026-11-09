@@ -7,6 +7,7 @@
 #include "ui/video_view.h"
 #include "util/timecode.h"
 
+#include <QAction>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -63,6 +64,7 @@ ProgramMonitorPanel::ProgramMonitorPanel(ProjectController& controller, playback
     auto* end = button(QStyle::SP_MediaSkipForward, tr("Go to End (End)"), [this] { m_engine->seek(m_engine->duration()); });
 
     auto* info = new QHBoxLayout();
+    m_info = info;
     info->addWidget(m_timecode);
     info->addStretch();
     info->addWidget(m_quality);
@@ -187,6 +189,7 @@ void ProgramMonitorPanel::publishSnapshot() {
         return;
     }
     auto snapshot = playback::makeSnapshot(project, m_sequence, ++m_generation);
+    snapshot->useProxies = m_useProxies;
     m_title->setText(qs(seq->name));
     m_scrub->setTiming(seq->duration(), seq->settings.frameRate);
     m_scrub->setMarks(seq->markIn, seq->markOut);
@@ -223,6 +226,21 @@ void ProgramMonitorPanel::tick() {
     } else {
         m_view->setComposite(nullptr);
     }
+}
+
+void ProgramMonitorPanel::setProxyAction(QAction* action) {
+    auto* button = new QToolButton(this);
+    button->setDefaultAction(action);
+    button->setAutoRaise(true);
+    m_info->insertWidget(m_info->indexOf(m_quality), button);
+}
+
+void ProgramMonitorPanel::setUseProxies(bool on) {
+    if (m_useProxies == on) {
+        return;
+    }
+    m_useProxies = on;
+    publishSnapshot();
 }
 
 } // namespace loki::ui

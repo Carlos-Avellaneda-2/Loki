@@ -145,7 +145,7 @@ void ExportDialog::updateSummary() {
     request.in = inOut ? seq->markIn.value_or(Rational()) : Rational();
     request.out = inOut ? seq->markOut.value_or(seq->duration()) : seq->duration();
     const auto [w, h] = exporter::ExportJob::outputSize(request);
-    const auto rate = seq->settings.frameRate;
+    const auto rate = exporter::ExportJob::frameRate(request);
     QString text = tr("Duration %1 (%2 frames)")
                        .arg(qs(formatTimecode(timeToFrames(request.out - request.in, rate, Rounding::Ceil), rate,
                                               supportsDropFrame(rate))))
