@@ -87,6 +87,35 @@ std::string gestureKey(GestureId gesture, const Target& t) {
 
 } // namespace
 
+std::unique_ptr<Command> setEffectString(const Project& project, ClipId clip, std::string_view effectType,
+                                         std::string_view key, std::string value) {
+    const auto t = target(project, clip, effectType, {});
+    const auto* sdef = findEffectDef(effectType)->stringParameter(key);
+    if (sdef == nullptr) {
+        throw CommandError("Unknown text parameter " + std::string(key));
+    }
+    return std::make_unique<EditClipCommand>(clip, "Change " + sdef->label,
+                                             [t, k = std::string(key), value = std::move(value)](Clip& c) {
+                                                 ensureEffect(c, t).strings[k] = value;
+                                             });
+}
+
+std::unique_ptr<Command> applyEffect(const Project& project, ClipId clip, std::string_view effectType) {
+    const auto t = target(project, clip, effectType, {});
+    const auto ref = project.findClip(clip);
+    const auto* def = findEffectDef(effectType);
+    if (def->fixed) {
+        throw CommandError(def->label + " is always available in Effect Controls");
+    }
+    if (def->kind != ref.track->kind) {
+        throw CommandError(def->label + (def->kind == TrackKind::Video ? " needs a video clip" : " needs an audio clip"));
+    }
+    if (findEffectByType(*ref.clip, effectType) != nullptr) {
+        throw CommandError("The clip already has " + def->label);
+    }
+    return std::make_unique<EditClipCommand>(clip, "Apply " + def->label, [t](Clip& c) { (void)ensureEffect(c, t); });
+}
+
 std::unique_ptr<Command> setEffectParameter(const Project& project, ClipId clip, std::string_view effectType,
                                             std::string_view key, double value, const Rational& sourceTime,
                                             GestureId gesture) {

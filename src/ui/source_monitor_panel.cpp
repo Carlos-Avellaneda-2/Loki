@@ -196,6 +196,10 @@ void SourceMonitorPanel::loadMedia(model::MediaId id) {
     if (item == nullptr) {
         return;
     }
+    if (item->isGenerated()) {
+        emit m_controller.commandFailed(tr("Titles are edited in the timeline and Effect Controls"));
+        return;
+    }
     m_media = id;
     m_title->setText(qs(item->name));
     m_engine->open(item->path, item->info);

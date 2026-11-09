@@ -1,4 +1,4 @@
-#include "app/main_window.h"
+﻿#include "app/main_window.h"
 
 #include "model/project_json.h"
 #include "ui/panel_factory.h"
@@ -12,6 +12,9 @@
 #include "ui/audio_meters.h"
 #include "ui/audio_mixer_panel.h"
 #include "ui/effect_controls_panel.h"
+#include "ui/effects_panel.h"
+#include "commands/effect_commands.h"
+#include "commands/transition_commands.h"
 #include "ui/program_monitor_panel.h"
 #include "ui/source_monitor_panel.h"
 #include "ui/timeline/timeline_panel.h"
@@ -22,6 +25,8 @@
 #include <DockWidget.h>
 
 #include <QAction>
+
+#include <algorithm>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QFileDialog>
@@ -126,6 +131,21 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
             dockWidget(ui::PanelId::EffectControls)->raise();
         }
     });
+    connect(m_timeline->view(), &ui::timeline::TimelineView::transitionSelected, this, [this](model::TransitionId id) {
+        if (id) {
+            m_effectControls->setTransition(id);
+            dockWidget(ui::PanelId::EffectControls)->raise();
+        } else if (m_effectControls->transition()) {
+            m_effectControls->setClip({});
+        }
+    });
+    connect(m_effects, &ui::EffectsPanel::applyRequested, this, [this](const QString& type, bool isTransition) {
+        if (isTransition) {
+            m_timeline->view()->applyTransitionAtPlayhead(type.toStdString());
+        } else {
+            m_timeline->view()->applyEffectToSelection(type.toStdString());
+        }
+    });
     connect(m_timeline, &ui::timeline::TimelinePanel::statusMessage, this,
             [this](const QString& text) { statusBar()->showMessage(text, 5000); });
     connect(m_sourceMonitor, &ui::SourceMonitorPanel::editRequested, this, &MainWindow::sourceEdit);
@@ -173,6 +193,51 @@ void MainWindow::sourceEdit(model::MediaId media, bool insert) {
     }
 }
 
+void MainWindow::newTitle() {
+    const auto& project = m_controller->project();
+    const auto* sequence = project.findSequence(m_activeSequence);
+    if (sequence == nullptr || sequence->videoTracks.empty()) {
+        statusBar()->showMessage(tr("No active sequence"), 4000);
+        return;
+    }
+    const Rational at = quantizeToFrame(m_programMonitor->engine().position(), sequence->settings.frameRate,
+                                        Rounding::Floor);
+    const Rational duration(5);
+    // Like Premiere: the first unlocked video track above the targeted one that is free over the
+    // title's range; the top track if none is.
+    const auto& tracks = sequence->videoTracks;
+    std::size_t from = 0;
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        if (tracks[i].id == m_timeline->view()->targets().video) {
+            from = i + 1;
+        }
+    }
+    auto track = tracks.back().id;
+    for (std::size_t i = std::min(from, tracks.size() - 1); i < tracks.size(); ++i) {
+        const bool free = std::none_of(tracks[i].clips.begin(), tracks[i].clips.end(), [&](const model::Clip& c) {
+            return c.start < at + duration && at < c.end();
+        });
+        if (free && !tracks[i].state.locked) {
+            track = tracks[i].id;
+            break;
+        }
+    }
+    try {
+        model::MediaId media;
+        auto command = commands::makeNewTitle(project, m_activeSequence, track, at, duration, "Title", &media);
+        if (m_controller->execute(std::move(command))) {
+            for (const auto& c : project.findTrack(track).track->clips) {
+                if (c.media == media) {
+                    m_timeline->view()->setSelection({c.id});
+                    break;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        statusBar()->showMessage(QString::fromUtf8(e.what()), 5000);
+    }
+}
+
 MainWindow::~MainWindow() {
     // Panels reference the controller and media services: destroy them (with the dock manager)
     // before Qt deletes the remaining children in creation order.
@@ -205,7 +270,9 @@ void MainWindow::createDockWidgets() {
     m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::ProgramMonitor), sourceArea);
 
     auto* timelineArea = m_dockManager->addDockWidget(ads::BottomDockWidgetArea, dockWidget(PanelId::Timeline));
-    m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Project), timelineArea);
+    auto* projectArea = m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Project), timelineArea);
+    m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Effects), projectArea);
+    projectArea->setCurrentDockWidget(dockWidget(PanelId::Project));
     m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
 
     sourceArea->setCurrentDockWidget(dockWidget(PanelId::SourceMonitor));
@@ -238,6 +305,10 @@ QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
     case ui::PanelId::AudioMeters: {
         m_audioMeters = new ui::AudioMetersPanel();
         return m_audioMeters;
+    }
+    case ui::PanelId::Effects: {
+        m_effects = new ui::EffectsPanel();
+        return m_effects;
     }
     case ui::PanelId::AudioMixer: {
         m_audioMixer = new ui::AudioMixerPanel(*m_controller);
@@ -273,6 +344,11 @@ void MainWindow::createMenus() {
     connect(quitAction, &QAction::triggered, this, &QWidget::close);
 
     fileMenu->insertAction(saveAction, m_projectPanel->importAction());
+    auto* titleAction = new QAction(tr("New &Title"), this);
+    m_shortcuts->bind(titleAction, QStringLiteral("app.newTitle"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext),
+                      QKeySequence(Qt::CTRL | Qt::Key_T));
+    connect(titleAction, &QAction::triggered, this, &MainWindow::newTitle);
+    fileMenu->insertAction(saveAction, titleAction);
     fileMenu->insertSeparator(saveAction);
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
@@ -399,3 +475,4 @@ bool MainWindow::restoreSettings(const QSettings& settings) {
 }
 
 } // namespace loki::app
+

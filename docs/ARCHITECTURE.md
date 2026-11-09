@@ -32,8 +32,9 @@ Cada carpeta de `src/` es una biblioteca estática CMake (`loki_<módulo>`). El 
 | `commands`  | `Command`, `UndoStack`, comandos concretos de edición | model, util | — |
 | `media`     | Probe, demux/decode FFmpeg, hwaccel, caché de fotogramas, thumbnails, waveforms, proxies | util, model (solo tipos de MediaItem) | FFmpeg |
 | `render`    | Conversión de color, renderer GL; luego interfaz `RenderBackend`, compositor y efectos | media (tipos de frame) | Qt GUI/OpenGL (OpenGL 3.3) |
-| `audio`     | Salida miniaudio (`AudioDevice`); mezclador en Fase 8 | util | miniaudio |
-| `playback`  | Reloj maestro, motor de reproducción, sincronía A/V, scrubbing, J/K/L | audio, media, model, util | — |
+| `audio`     | Salida miniaudio (`AudioDevice`) y mezclador puro (`audio/mixer`) | util | miniaudio |
+| `text`      | Rasterizado de títulos (QPainter sobre QImage, D21) | media | Qt GUI |
+| `playback`  | Reloj maestro, motor de reproducción, sincronía A/V, scrubbing, J/K/L | audio, media, model, render_core, text, util | — |
 | `export`    | Pipeline de exportación (mismo motor), presets, encoders | playback (grafo), render, audio, media | FFmpeg |
 | `ui`        | Paneles: Project, SourceMonitor, ProgramMonitor, Timeline, EffectControls, AudioMeters | todos los anteriores | Qt Widgets |
 | `app`       | `main`, ventana principal (dock manager), tema, workspaces, acciones y atajos | ui | Qt Widgets, Qt ADS |
@@ -348,6 +349,37 @@ sequenceDiagram
 - Portapapeles (D18): `copyClips` y `makePaste` (sobrescribir o insertar).
   - Pega en las pistas de destino y conserva la disposición relativa de las pistas.
   - Los clips pegados reciben ids nuevos y grupos de vínculo nuevos.
+
+## 7g. Transiciones, color y títulos (Fase 9, D19–D22)
+
+- Transiciones (D19): `model::Transition` vive en la pista.
+  - `model/transitions` calcula su tramo según el corte y la alineación, con funciones puras.
+  - Una transición sin tramo válido queda inactiva. `ReplaceClipsCommand` borra las inactivas al editar y las
+    restaura al deshacer.
+  - En video:
+    - Disolución: el clip entrante con opacidad × p.
+    - Fundido a negro: `dim` de 0 a 1 en el saliente y luego de 1 a 0 en el entrante.
+    - Barrido: una máscara de izquierda a derecha.
+    - Pasado el corte se lee la media extra del clip; si no hay, se congela el último fotograma.
+  - En audio: crossfade de potencia constante (cos/sin) en `SequenceAudioSource`.
+- Color y LUT: los efectos `loki.color` y `loki.lut` se resuelven a un `render::LayerGrade` por capa.
+  - Orden: corrección de color, luego el LUT (mezclado por intensidad), luego `dim`.
+  - El LUT `.cube` se carga en el hilo de medios, con caché por ruta. Un archivo inválido se registra en el log
+    y se ignora.
+- Títulos (D21): los medios generados `loki.title` se dibujan con `text::renderTitle` (QtGui) en RGBA con alfa
+  propio. Se cachean por clip y por especificación.
+- El compositor GPU agrega en el shader la gradación (incluido el LUT como textura 3D), la máscara de barrido y el
+  alfa de las capas RGBA.
+- `render::compositeCpu` (D22) hace la misma matemática en CPU:
+  - Es la referencia de los tests en CI.
+  - Es el respaldo del export sin OpenGL 3.3.
+  - `loki_gl_tests` compara la GPU contra la CPU.
+- Interfaz:
+  - Panel Efectos: se arrastra a un clip o a un borde, o se aplica con doble clic.
+  - Ctrl+D y Ctrl+Shift+D aplican la transición por defecto en el punto de edición más cercano al cabezal.
+  - Las transiciones se dibujan en el timeline: clic las selecciona y Supr las borra.
+  - Controles de Efectos edita la duración y la alineación de la transición, el texto del título y el LUT.
+  - Archivo > Nuevo título (Ctrl+T) crea el título en la primera pista libre por encima de la pista destino.
 
 ## 8. Export
 

@@ -46,6 +46,7 @@ private:
     std::vector<PlacedClip> m_before;
     std::vector<PlacedClip> m_after;
     GestureId m_gesture;
+    std::vector<std::pair<model::TrackId, model::Transition>> m_dropped; // removed by the last redo
 };
 
 // Working copy of some tracks of a sequence. Edit operations change the copy; build() diffs it
@@ -194,6 +195,14 @@ enum class ClipEdge { In, Out };
                                                      const std::vector<model::ClipId>& clips);
 [[nodiscard]] std::unique_ptr<Command> makeUnlinkClips(const model::Project& project, model::SequenceId sequence,
                                                        const std::vector<model::ClipId>& clips);
+
+// --- Titles (Phase 9) --------------------------------------------------------------------------
+
+// Creates a title (generated media, D20) in the project and places `duration` of it at `at` on
+// `track` (overwrite), as one undo step. Returns the command; `titleMedia` receives the new id.
+[[nodiscard]] std::unique_ptr<Command> makeNewTitle(const model::Project& project, model::SequenceId sequence,
+                                                    model::TrackId track, const Rational& at, const Rational& duration,
+                                                    std::string name, model::MediaId* titleMedia = nullptr);
 
 // --- Copy / paste (D18) ------------------------------------------------------------------------
 

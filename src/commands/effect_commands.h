@@ -45,6 +45,16 @@ namespace loki::commands {
 [[nodiscard]] std::unique_ptr<Command> resetEffect(const model::Project& project, model::ClipId clip,
                                                    std::string_view effectType);
 
+// Sets a text parameter (title text, font, color, LUT file), creating the effect if needed.
+[[nodiscard]] std::unique_ptr<Command> setEffectString(const model::Project& project, model::ClipId clip,
+                                                       std::string_view effectType, std::string_view key,
+                                                       std::string value);
+
+// Adds a regular effect (Color Correction, LUT) with its defaults. Throws if the clip already has
+// one of that type or if it does not fit the clip (video effect on audio, ...).
+[[nodiscard]] std::unique_ptr<Command> applyEffect(const model::Project& project, model::ClipId clip,
+                                                   std::string_view effectType);
+
 // Media and sequence settings a clip's defaults depend on.
 struct ClipContext {
     const model::Clip* clip = nullptr;

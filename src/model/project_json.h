@@ -13,7 +13,7 @@ namespace loki::model {
 
 // On-disk format of `.loki` project files (JSON). Bump when the schema changes and add a
 // migration step in project_json.cpp (vN -> vN+1).
-inline constexpr int kProjectFormatVersion = 1;
+inline constexpr int kProjectFormatVersion = 2; // 2: transitions, generated media, text params (D20)
 inline constexpr std::string_view kProjectFormatName = "loki-project";
 inline constexpr std::string_view kProjectFileExtension = ".loki";
 

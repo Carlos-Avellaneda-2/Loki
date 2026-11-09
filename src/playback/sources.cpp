@@ -4,6 +4,7 @@
 #include "media/video_decoder.h"
 #include "model/effect_registry.h"
 #include "model/project_json.h"
+#include "model/transitions.h"
 
 #include <spdlog/spdlog.h>
 
@@ -120,6 +121,98 @@ media::VideoDecoder* SequenceVideoSource::decoderFor(const model::Clip& clip, co
     return m_decoders.front().second.get();
 }
 
+std::shared_ptr<const render::Lut3D> SequenceVideoSource::lutFor(const std::string& path) {
+    if (const auto it = m_luts.find(path); it != m_luts.end()) {
+        return it->second;
+    }
+    std::shared_ptr<const render::Lut3D> lut;
+    try {
+        lut = render::loadCubeLut(path);
+    } catch (const std::exception& e) {
+        spdlog::warn("LUT not applied: {}", e.what());
+    }
+    m_luts.emplace(path, lut);
+    return lut;
+}
+
+media::VideoFramePtr SequenceVideoSource::titleFrame(const model::Clip& clip, const Rational& sourceTime) {
+    const auto& settings = m_snapshot->sequence.settings;
+    static const model::MediaInfo kCanvas;
+    const auto value = [&](const char* key) {
+        return model::effectiveValue(clip, model::kTextEffect, key, sourceTime, kCanvas, settings);
+    };
+    text::TitleSpec spec;
+    spec.text = model::effectiveString(clip, model::kTextEffect, "text");
+    spec.font = model::effectiveString(clip, model::kTextEffect, "font");
+    spec.color = model::effectiveString(clip, model::kTextEffect, "color");
+    spec.size = value("size");
+    spec.x = value("positionX");
+    spec.y = value("positionY");
+    spec.shadow = value("shadow") >= 0.5;
+    spec.shadowDistance = value("shadowDistance");
+    spec.shadowOpacity = value("shadowOpacity");
+    spec.canvasWidth = settings.width;
+    spec.canvasHeight = settings.height;
+    auto& cached = m_titles[clip.id];
+    if (!cached.frame || !(cached.spec == spec)) {
+        cached.spec = spec;
+        cached.frame = text::renderTitle(spec);
+    }
+    return cached.frame;
+}
+
+std::optional<render::Layer> SequenceVideoSource::layerFor(const model::Clip& clip, const Rational& t) {
+    if (!clip.enabled) {
+        return std::nullopt;
+    }
+    const auto mediaIt = m_snapshot->media.find(clip.media);
+    if (mediaIt == m_snapshot->media.end() || !mediaIt->second.info.hasVideo) {
+        return std::nullopt;
+    }
+    const auto& media = mediaIt->second;
+    const auto& seq = m_snapshot->sequence;
+    Rational sourceTime = max(Rational(), clip.toSourceTime(t));
+    if (!media.isGenerated() && !media.info.isStill && media.info.duration.isPositive() &&
+        sourceTime >= media.info.duration) {
+        sourceTime = max(Rational(), media.info.duration - m_frameDuration); // freeze the last frame
+    }
+    render::Layer layer;
+    if (media.generator == model::kTitleGenerator) {
+        layer.frame = titleFrame(clip, sourceTime);
+        layer.sourceWidth = seq.settings.width;
+        layer.sourceHeight = seq.settings.height;
+    } else {
+        auto* decoder = decoderFor(clip, media);
+        if (decoder == nullptr) {
+            return std::nullopt;
+        }
+        layer.frame = decoder->frameAt(sourceTime);
+        if (layer.frame) {
+            layer.sourceWidth = media.info.width > 0 ? media.info.width : layer.frame->width;
+            layer.sourceHeight = media.info.height > 0 ? media.info.height : layer.frame->height;
+        }
+    }
+    if (!layer.frame) {
+        return std::nullopt;
+    }
+    layer.transform = model::resolveTransform(clip, sourceTime, media.info, seq.settings);
+    if (const auto* color = model::findEffectByType(clip, model::kColorEffect); color != nullptr && color->enabled) {
+        const auto v = [&](const char* key) {
+            return static_cast<float>(model::effectiveValue(clip, model::kColorEffect, key, sourceTime, media.info, seq.settings));
+        };
+        layer.grade.color = {v("exposure"), v("contrast"), v("saturation"), v("temperature")};
+    }
+    if (const auto* lut = model::findEffectByType(clip, model::kLutEffect); lut != nullptr && lut->enabled) {
+        const auto file = lut->string("file");
+        if (!file.empty()) {
+            layer.grade.lut = lutFor(file);
+            layer.grade.lutMix = static_cast<float>(
+                model::effectiveValue(clip, model::kLutEffect, "intensity", sourceTime, media.info, seq.settings) / 100.0);
+        }
+    }
+    return layer;
+}
+
 std::optional<TimedFrame> SequenceVideoSource::frameAt(const Rational& requested) {
     const auto& seq = m_snapshot->sequence;
     const Rational t = quantizeToFrame(max(Rational(), requested), seq.settings.frameRate, Rounding::Floor);
@@ -129,34 +222,58 @@ std::optional<TimedFrame> SequenceVideoSource::frameAt(const Rational& requested
     auto composite = std::make_shared<render::CompositeFrame>();
     composite->width = seq.settings.width;
     composite->height = seq.settings.height;
+    const auto push = [&](std::optional<render::Layer> layer) {
+        if (layer) {
+            composite->layers.push_back(std::move(*layer));
+        }
+    };
     // V1 (index 0) is the bottom layer.
     for (const auto& track : seq.videoTracks) {
         if (track.state.hidden) {
             continue;
         }
+        if (const auto active = model::activeTransition(track, t)) {
+            const auto& span = active->span;
+            const auto p = static_cast<float>(span.progress(t));
+            auto a = span.from != nullptr ? layerFor(*span.from, t) : std::nullopt;
+            auto b = span.to != nullptr ? layerFor(*span.to, t) : std::nullopt;
+            const auto& type = active->transition->type;
+            if (type == model::kDipToBlack) {
+                if (a && b) {
+                    if (p < 0.5f) {
+                        a->grade.dim = 2.0f * p;
+                        b.reset();
+                    } else {
+                        b->grade.dim = 2.0f * (1.0f - p);
+                        a.reset();
+                    }
+                } else if (a) {
+                    a->grade.dim = p;
+                } else if (b) {
+                    b->grade.dim = 1.0f - p;
+                }
+            } else if (type == model::kWipe) {
+                if (b) {
+                    b->wipe = {true, p, 0.02f, false};
+                } else if (a) {
+                    a->wipe = {true, p, 0.02f, true};
+                }
+            } else { // Cross Dissolve (and unknown types)
+                if (b) {
+                    b->transform.opacity *= p;
+                } else if (a) {
+                    a->transform.opacity *= 1.0f - p;
+                }
+            }
+            push(std::move(a));
+            push(std::move(b));
+            continue;
+        }
         const auto clip = std::find_if(track.clips.begin(), track.clips.end(),
                                        [&](const model::Clip& c) { return c.start <= t && t < c.end(); });
-        if (clip == track.clips.end() || !clip->enabled) {
-            continue;
+        if (clip != track.clips.end()) {
+            push(layerFor(*clip, t));
         }
-        const auto media = m_snapshot->media.find(clip->media);
-        if (media == m_snapshot->media.end() || !media->second.info.hasVideo) {
-            continue;
-        }
-        auto* decoder = decoderFor(*clip, media->second);
-        if (decoder == nullptr) {
-            continue;
-        }
-        const Rational sourceTime = clip->toSourceTime(t);
-        render::Layer layer;
-        layer.frame = decoder->frameAt(sourceTime);
-        if (!layer.frame) {
-            continue;
-        }
-        layer.sourceWidth = media->second.info.width > 0 ? media->second.info.width : layer.frame->width;
-        layer.sourceHeight = media->second.info.height > 0 ? media->second.info.height : layer.frame->height;
-        layer.transform = model::resolveTransform(*clip, sourceTime, media->second.info, seq.settings);
-        composite->layers.push_back(std::move(layer));
     }
     TimedFrame result{t, m_frameDuration, nullptr, nullptr};
     if (!composite->layers.empty()) {
@@ -202,6 +319,29 @@ void SequenceVideoSource::setMaxSize(int maxWidth, int maxHeight) {
 
 // --- SequenceAudioSource -----------------------------------------------------------------------
 
+std::shared_ptr<SequenceSnapshot> makeSnapshot(const model::Project& project, model::SequenceId id,
+                                               std::uint64_t generation) {
+    const auto* seq = project.findSequence(id);
+    if (seq == nullptr) {
+        return nullptr;
+    }
+    auto snapshot = std::make_shared<SequenceSnapshot>();
+    snapshot->sequence = *seq;
+    for (const auto* list : {&seq->videoTracks, &seq->audioTracks}) {
+        for (const auto& track : *list) {
+            for (const auto& clip : track.clips) {
+                if (!snapshot->media.contains(clip.media)) {
+                    if (const auto* media = project.findMedia(clip.media)) {
+                        snapshot->media.emplace(clip.media, *media);
+                    }
+                }
+            }
+        }
+    }
+    snapshot->generation = generation;
+    return snapshot;
+}
+
 bool sameExceptAudioMix(const SequenceSnapshot& a, const SequenceSnapshot& b) {
     if (a.media != b.media) {
         return false;
@@ -213,6 +353,7 @@ bool sameExceptAudioMix(const SequenceSnapshot& a, const SequenceSnapshot& b) {
             track.state.pan = 0.0;
             track.state.muted = false;
             track.state.solo = false;
+            track.transitions.clear(); // crossfades only change gains
             for (auto& clip : track.clips) {
                 clip.fadeIn = {};
                 clip.fadeOut = {};
@@ -251,7 +392,8 @@ constexpr std::int64_t kGainStep = 64;
 } // namespace
 
 void SequenceAudioSource::mixClip(const model::Clip& clip, const model::MediaItem& media, std::int64_t segStart,
-                                  std::int64_t segEnd, std::int64_t blockStart, float* bus) {
+                                  std::int64_t segEnd, std::int64_t blockStart, float* bus,
+                                  const std::vector<model::TransitionSpan>& spans) {
     auto& reader = m_readers[clip.id];
     if (!reader.decoder) {
         try {
@@ -279,7 +421,18 @@ void SequenceAudioSource::mixClip(const model::Clip& clip, const model::MediaIte
     const auto gainAt = [&](std::int64_t frame) {
         const Rational t(frame, m_rate);
         const auto mix = model::resolveAudioMix(clip, clip.toSourceTime(t));
-        const auto fade = audio::clipFadeGain((t - clip.start).toDouble(), duration, fadeIn, fadeOut);
+        auto fade = audio::clipFadeGain((t - clip.start).toDouble(), duration, fadeIn, fadeOut);
+        // Constant-power crossfades (D19): the outgoing clip follows cos, the incoming one sin.
+        for (const auto& span : spans) {
+            if (span.contains(t)) {
+                const double p = span.progress(t);
+                if (span.from == &clip) {
+                    fade *= audio::fadeGain(1.0 - p);
+                } else if (span.to == &clip) {
+                    fade *= audio::fadeGain(p);
+                }
+            }
+        }
         const auto pan = mono ? audio::monoPanGains(mix.pan) : audio::balanceGains(mix.pan);
         return pan * static_cast<float>(audio::dbToGain(mix.levelDb) * fade);
     };
@@ -322,12 +475,28 @@ std::size_t SequenceAudioSource::read(float* out, std::size_t frames) {
             continue; // silent for the whole block: skip decoding (readers re-seek when heard again)
         }
         m_bus.assign(nFrames * ch, 0.0f);
+        std::vector<model::TransitionSpan> spans;
+        for (const auto& transition : track.transitions) {
+            if (auto span = model::transitionSpan(track, transition)) {
+                spans.push_back(*span);
+            }
+        }
         for (const auto& clip : track.clips) {
             if (!clip.enabled) {
                 continue;
             }
-            const auto clipStart = timeToFrames(clip.start, rate, Rounding::Nearest);
-            const auto clipEnd = timeToFrames(clip.end(), rate, Rounding::Nearest);
+            auto clipStart = timeToFrames(clip.start, rate, Rounding::Nearest);
+            auto clipEnd = timeToFrames(clip.end(), rate, Rounding::Nearest);
+            // Two-sided crossfades read past the cut (handles).
+            for (const auto& span : spans) {
+                if (span.from == &clip && span.to != nullptr) {
+                    clipEnd = std::max(clipEnd, timeToFrames(span.end, rate, Rounding::Nearest));
+                }
+                if (span.to == &clip && span.from != nullptr) {
+                    const auto earliest = timeToFrames(clip.start - clip.sourceIn, rate, Rounding::Ceil);
+                    clipStart = std::max(earliest, std::min(clipStart, timeToFrames(span.start, rate, Rounding::Nearest)));
+                }
+            }
             const auto segStart = std::max(blockStart, clipStart);
             const auto segEnd = std::min(blockEnd, clipEnd);
             if (segStart >= segEnd) {
@@ -337,7 +506,7 @@ std::size_t SequenceAudioSource::read(float* out, std::size_t frames) {
             if (media == m_snapshot->media.end() || !media->second.info.hasAudio || m_offline.contains(clip.media)) {
                 continue;
             }
-            mixClip(clip, media->second, segStart, segEnd, blockStart, m_bus.data());
+            mixClip(clip, media->second, segStart, segEnd, blockStart, m_bus.data(), spans);
         }
         audio::applyRamp(m_bus.data(), nFrames, m_channels, from, target);
         m_levels.push_back({track.id, audio::measure(m_bus.data(), nFrames, m_channels)});

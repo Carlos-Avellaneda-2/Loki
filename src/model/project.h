@@ -76,6 +76,13 @@ struct ClipRef {
     std::size_t index = 0; // index within track->clips
 };
 
+// Location of a transition inside the project (valid until the next mutation).
+struct TransitionRef {
+    const Sequence* sequence = nullptr;
+    const Track* track = nullptr;
+    const Transition* transition = nullptr;
+};
+
 class ProjectMutator;
 class ProjectBuilder;
 
@@ -100,6 +107,7 @@ public:
     [[nodiscard]] const Sequence* findSequence(SequenceId id) const noexcept;
     [[nodiscard]] TrackRef findTrack(TrackId id) const noexcept;
     [[nodiscard]] ClipRef findClip(ClipId id) const noexcept;
+    [[nodiscard]] TransitionRef findTransition(TransitionId id) const noexcept;
 
     // Clips (in every sequence) whose media is `id`.
     [[nodiscard]] std::vector<ClipId> clipsUsingMedia(MediaId id) const;
@@ -155,6 +163,9 @@ public:
     void insertTrack(SequenceId sequence, std::size_t index, Track track);
     Track removeTrack(TrackId id, std::size_t* indexOut = nullptr);
     void setTrackState(TrackId id, TrackState state);
+    void addTransition(TrackId track, Transition transition);
+    Transition removeTransition(TransitionId id);
+    void replaceTransition(Transition transition); // same id; any field but the track
 
     // Clips (kept sorted by start; overlaps on the same track are rejected)
     void insertClip(TrackId track, Clip clip);

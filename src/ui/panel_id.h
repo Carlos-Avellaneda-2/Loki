@@ -15,12 +15,13 @@ enum class PanelId {
     EffectControls,
     AudioMeters,
     AudioMixer,
+    Effects,
 };
 
 inline constexpr std::array kAllPanels = {
     PanelId::Project,        PanelId::SourceMonitor,  PanelId::ProgramMonitor,
     PanelId::Timeline,       PanelId::EffectControls, PanelId::AudioMeters,
-    PanelId::AudioMixer,
+    PanelId::AudioMixer,     PanelId::Effects,
 };
 
 // Stable, non-translatable identifier used as QObject::objectName and in saved layouts.
@@ -33,6 +34,7 @@ constexpr std::string_view panelObjectName(PanelId id) noexcept {
     case PanelId::EffectControls: return "panel.effectControls";
     case PanelId::AudioMeters: return "panel.audioMeters";
     case PanelId::AudioMixer: return "panel.audioMixer";
+    case PanelId::Effects: return "panel.effects";
     }
     return "panel.unknown";
 }
@@ -47,6 +49,7 @@ constexpr std::string_view panelTitle(PanelId id) noexcept {
     case PanelId::EffectControls: return "Effect Controls";
     case PanelId::AudioMeters: return "Audio Meters";
     case PanelId::AudioMixer: return "Audio Track Mixer";
+    case PanelId::Effects: return "Effects";
     }
     return "Unknown";
 }

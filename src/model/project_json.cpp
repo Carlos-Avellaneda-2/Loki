@@ -18,7 +18,11 @@ namespace {
 // ---------------------------------------------------------------------------------------------
 // Migrations: kMigrations[i] upgrades a document from version i+1 to i+2.
 using Migration = void (*)(json&);
-constexpr std::array<Migration, kProjectFormatVersion - 1> kMigrations{};
+
+// v1 -> v2: only additions (transitions, generators, string parameters); v1 documents are valid.
+void migrate1to2(json&) {}
+
+constexpr std::array<Migration, kProjectFormatVersion - 1> kMigrations{&migrate1to2};
 
 // ---------------------------------------------------------------------------------------------
 // Writing
@@ -54,10 +58,23 @@ json effectToJson(const Effect& effect) {
         }
         params.push_back({{"key", p.key}, {"value", p.value}, {"keyframes", std::move(keys)}});
     }
-    return {{"id", idToJson(effect.id)},
-            {"type", effect.type},
-            {"enabled", effect.enabled},
-            {"parameters", std::move(params)}};
+    json j = {{"id", idToJson(effect.id)},
+              {"type", effect.type},
+              {"enabled", effect.enabled},
+              {"parameters", std::move(params)}};
+    if (!effect.strings.empty()) {
+        j["strings"] = effect.strings;
+    }
+    return j;
+}
+
+const char* alignmentName(TransitionAlignment a) {
+    switch (a) {
+    case TransitionAlignment::Center: return "center";
+    case TransitionAlignment::StartAtCut: return "start";
+    case TransitionAlignment::EndAtCut: return "end";
+    }
+    return "center";
 }
 
 json clipToJson(const Clip& clip) {
@@ -95,6 +112,18 @@ json trackToJson(const Track& track) {
               {"hidden", track.state.hidden},
               {"muted", track.state.muted},
               {"clips", std::move(clips)}};
+    if (!track.transitions.empty()) {
+        json transitions = json::array();
+        for (const auto& t : track.transitions) {
+            transitions.push_back({{"id", idToJson(t.id)},
+                                   {"type", t.type},
+                                   {"from", idToJson(t.from)},
+                                   {"to", idToJson(t.to)},
+                                   {"duration", rationalToJson(t.duration)},
+                                   {"alignment", alignmentName(t.alignment)}});
+        }
+        j["transitions"] = std::move(transitions);
+    }
     // Optional mixer fields (D16): omitted at their defaults.
     if (track.state.volumeDb != 0.0) {
         j["volumeDb"] = track.state.volumeDb;
@@ -133,6 +162,9 @@ json mediaToJson(const MediaItem& m, const std::filesystem::path& projectDir) {
     }
     if (m.proxyPath) {
         j["proxyPath"] = pathToUtf8(*m.proxyPath);
+    }
+    if (m.isGenerated()) {
+        j["generator"] = m.generator;
     }
     if (m.info.isStill) {
         j["info"]["isStill"] = true;
@@ -301,6 +333,9 @@ private:
         if (j.contains("proxyPath")) {
             m.proxyPath = pathFromUtf8(string(j, "proxyPath", at));
         }
+        if (j.contains("generator")) {
+            m.generator = string(j, "generator", at);
+        }
         const auto& info = field(j, "info", at);
         const std::string infoAt = at + "/info";
         m.info.hasVideo = boolean(info, "hasVideo", infoAt);
@@ -350,7 +385,30 @@ private:
             }
             e.parameters.push_back(std::move(p));
         }
+        if (j.contains("strings")) {
+            const auto& strings = field(j, "strings", at);
+            if (!strings.is_object()) {
+                fail(at + "/strings", "expected an object");
+            }
+            for (const auto& [key, value] : strings.items()) {
+                e.strings[key] = string(strings, key.c_str(), at + "/strings");
+            }
+        }
         return e;
+    }
+
+    static TransitionAlignment readAlignment(const json& j, const std::string& at) {
+        const auto name = string(j, "alignment", at);
+        if (name == "center") {
+            return TransitionAlignment::Center;
+        }
+        if (name == "start") {
+            return TransitionAlignment::StartAtCut;
+        }
+        if (name == "end") {
+            return TransitionAlignment::EndAtCut;
+        }
+        fail(at + "/alignment", "unknown value " + name);
     }
 
     static Clip readClip(const json& j, const std::string& at) {
@@ -384,6 +442,20 @@ private:
         t.state.locked = boolean(j, "locked", at);
         t.state.hidden = boolean(j, "hidden", at);
         t.state.muted = boolean(j, "muted", at);
+        if (j.contains("transitions")) {
+            const auto& list = array(j, "transitions", at);
+            for (std::size_t i = 0; i < list.size(); ++i) {
+                const std::string tAt = at + "/transitions/" + std::to_string(i);
+                Transition tr;
+                tr.id = id<TransitionId>(list[i], "id", tAt, false);
+                tr.type = string(list[i], "type", tAt);
+                tr.from = id<ClipId>(list[i], "from", tAt, true);
+                tr.to = id<ClipId>(list[i], "to", tAt, true);
+                tr.duration = rational(list[i], "duration", tAt);
+                tr.alignment = readAlignment(list[i], tAt);
+                t.transitions.push_back(std::move(tr));
+            }
+        }
         if (j.contains("volumeDb")) {
             t.state.volumeDb = number(j, "volumeDb", at);
         }

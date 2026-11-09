@@ -41,6 +41,24 @@ uniform mat3 yuvMatrix;
 uniform vec3 yuvOffset;
 uniform float opacity;
 uniform int blendMode;   // model::BlendMode
+// Grading (render::LayerGrade), same order and formulas as render::gradePixel.
+uniform bool colorOn;
+uniform float exposure;
+uniform float contrast;
+uniform float saturation;
+uniform float temperature;
+uniform bool lutOn;
+uniform sampler3D lut;
+uniform float lutSize;
+uniform vec3 lutMin;
+uniform vec3 lutMax;
+uniform float lutMix;
+uniform float dim;
+// Wipe mask (render::wipeAlpha).
+uniform bool wipeOn;
+uniform float wipeProgress;
+uniform float wipeSoftness;
+uniform bool wipeReverse;
 
 vec3 sourceColor() {
     if (format == 2) {
@@ -66,10 +84,38 @@ vec3 blend(vec3 s, vec3 d) {
     return s;
 }
 
+vec3 grade(vec3 c) {
+    if (colorOn) {
+        c = (c * exp2(exposure) - 0.5) * (1.0 + contrast / 100.0) + 0.5;
+        float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = luma + (c - luma) * (saturation / 100.0);
+        c.r *= 1.0 + 0.1 * temperature / 100.0;
+        c.b *= 1.0 - 0.1 * temperature / 100.0;
+        c = clamp(c, 0.0, 1.0);
+    }
+    if (lutOn && lutMix > 0.0) {
+        vec3 x = clamp((c - lutMin) / max(lutMax - lutMin, vec3(1e-6)), 0.0, 1.0);
+        vec3 l = texture(lut, (x * (lutSize - 1.0) + 0.5) / lutSize).rgb;
+        c = mix(c, l, clamp(lutMix, 0.0, 1.0));
+    }
+    return c * (1.0 - clamp(dim, 0.0, 1.0));
+}
+
+float wipeAlpha(float x) {
+    if (!wipeOn) return 1.0;
+    float soft = max(wipeSoftness, 1e-4);
+    float edge = -soft + wipeProgress * (1.0 + 2.0 * soft);
+    float t = clamp((edge - x) / soft + 0.5, 0.0, 1.0);
+    float shown = t * t * (3.0 - 2.0 * t);
+    return wipeReverse ? 1.0 - shown : shown;
+}
+
 void main() {
     vec3 dst = texture(accum, gl_FragCoord.xy / targetSize).rgb;
-    vec3 src = sourceColor();
-    color = vec4(mix(dst, blend(src, dst), clamp(opacity, 0.0, 1.0)), 1.0);
+    vec3 src = grade(sourceColor());
+    float srcAlpha = format == 2 ? texture(plane0, uv).a : 1.0;
+    float a = clamp(opacity, 0.0, 1.0) * srcAlpha * wipeAlpha(gl_FragCoord.x / targetSize.x);
+    color = vec4(mix(dst, blend(src, dst), a), 1.0);
 }
 )";
 
@@ -263,6 +309,28 @@ void GlCompositor::render(const CompositeFrame& frame, int width, int height) {
                                                                                                     : 2);
         m_layerProgram.setUniformValue("opacity", static_cast<float>(layer.transform.opacity / 100.0));
         m_layerProgram.setUniformValue("blendMode", static_cast<int>(layer.transform.blend));
+        const auto& lg = layer.grade;
+        m_layerProgram.setUniformValue("colorOn", !lg.color.isIdentity());
+        m_layerProgram.setUniformValue("exposure", lg.color.exposure);
+        m_layerProgram.setUniformValue("contrast", lg.color.contrast);
+        m_layerProgram.setUniformValue("saturation", lg.color.saturation);
+        m_layerProgram.setUniformValue("temperature", lg.color.temperature);
+        m_layerProgram.setUniformValue("dim", lg.dim);
+        const unsigned int lutTexture = lg.lut ? lutTextureFor(lg.lut) : 0;
+        m_layerProgram.setUniformValue("lutOn", lutTexture != 0);
+        f->glActiveTexture(GL_TEXTURE4);
+        f->glBindTexture(GL_TEXTURE_3D, lutTexture);
+        m_layerProgram.setUniformValue("lut", 4);
+        if (lg.lut) {
+            m_layerProgram.setUniformValue("lutSize", static_cast<float>(lg.lut->size));
+            m_layerProgram.setUniformValue("lutMin", QVector3D(lg.lut->domainMin[0], lg.lut->domainMin[1], lg.lut->domainMin[2]));
+            m_layerProgram.setUniformValue("lutMax", QVector3D(lg.lut->domainMax[0], lg.lut->domainMax[1], lg.lut->domainMax[2]));
+        }
+        m_layerProgram.setUniformValue("lutMix", lg.lutMix);
+        m_layerProgram.setUniformValue("wipeOn", layer.wipe.enabled);
+        m_layerProgram.setUniformValue("wipeProgress", layer.wipe.progress);
+        m_layerProgram.setUniformValue("wipeSoftness", layer.wipe.softness);
+        m_layerProgram.setUniformValue("wipeReverse", layer.wipe.reverse);
         for (int p = 0; p < 3; ++p) {
             f->glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(p));
             f->glBindTexture(GL_TEXTURE_2D, m_layerTextures[i][static_cast<std::size_t>(p)]);
@@ -276,8 +344,42 @@ void GlCompositor::render(const CompositeFrame& frame, int width, int height) {
     }
     m_vao.release();
     m_layerProgram.release();
+    f->glActiveTexture(GL_TEXTURE4);
+    f->glBindTexture(GL_TEXTURE_3D, 0);
     f->glActiveTexture(GL_TEXTURE0);
     f->glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
+    // Drop LUT textures no layer used in this frame.
+    for (auto it = m_luts.begin(); it != m_luts.end();) {
+        if (!it->second.usedThisFrame) {
+            f->glDeleteTextures(1, &it->second.texture);
+            it = m_luts.erase(it);
+        } else {
+            it->second.usedThisFrame = false;
+            ++it;
+        }
+    }
+}
+
+unsigned int GlCompositor::lutTextureFor(const std::shared_ptr<const Lut3D>& lut) {
+    auto& entry = m_luts[lut.get()];
+    entry.usedThisFrame = true;
+    if (entry.lut != lut) { // new (or a different LUT at a reused address)
+        auto* f = gl();
+        if (entry.texture == 0) {
+            f->glGenTextures(1, &entry.texture);
+        }
+        entry.lut = lut;
+        f->glBindTexture(GL_TEXTURE_3D, entry.texture);
+        f->glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        f->glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        f->glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        f->glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        f->glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        f->glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        f->glTexImage3D(GL_TEXTURE_3D, 0, GL_RGB16F, lut->size, lut->size, lut->size, 0, GL_RGB, GL_FLOAT,
+                        lut->data.data());
+    }
+    return entry.texture;
 }
 
 void GlCompositor::present(unsigned int targetFramebuffer, int viewportWidth, int viewportHeight) {
@@ -336,6 +438,10 @@ void GlCompositor::release() {
         f->glDeleteTextures(3, tex.data());
     }
     m_layerTextures.clear();
+    for (auto& [key, entry] : m_luts) {
+        f->glDeleteTextures(1, &entry.texture);
+    }
+    m_luts.clear();
     m_vbo.destroy();
     m_vao.destroy();
     m_layerProgram.removeAllShaders();

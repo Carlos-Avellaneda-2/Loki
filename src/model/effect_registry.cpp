@@ -19,6 +19,15 @@ const char* blendModeName(BlendMode mode) noexcept {
     return "Normal";
 }
 
+const StringParameterDef* EffectDef::stringParameter(std::string_view key) const noexcept {
+    for (const auto& p : strings) {
+        if (p.key == key) {
+            return &p;
+        }
+    }
+    return nullptr;
+}
+
 const ParameterDef* EffectDef::parameter(std::string_view key) const noexcept {
     for (const auto& p : parameters) {
         if (p.key == key) {
@@ -78,6 +87,47 @@ const std::vector<EffectDef>& effectRegistry() {
             {"pan", "Pan", 0, DefaultKind::Constant, -100, 100, 1, 1, "", {}, true},
         };
         r.push_back(std::move(panner));
+
+        EffectDef text;
+        text.type = std::string(kTextEffect);
+        text.label = "Text";
+        text.fixed = true;
+        text.generator = std::string(kTitleGenerator);
+        text.parameters = {
+            {"size", "Font Size", 96, DefaultKind::Constant, 4, 1000, 1, 0, "px", {}, true},
+            {"positionX", "Position X", 0, DefaultKind::SequenceCenterX, -100000, 100000, 1, 1, "", {}, true},
+            {"positionY", "Position Y", 0, DefaultKind::SequenceCenterY, -100000, 100000, 1, 1, "", {}, true},
+            {"shadow", "Shadow", 1, DefaultKind::Constant, 0, 1, 1, 0, "", {"Off", "On"}, false},
+            {"shadowDistance", "Shadow Distance", 6, DefaultKind::Constant, 0, 200, 1, 1, "px", {}, true},
+            {"shadowOpacity", "Shadow Opacity", 60, DefaultKind::Constant, 0, 100, 1, 1, "%", {}, true},
+        };
+        text.strings = {
+            {"text", "Text", "Title", StringKind::Text},
+            {"font", "Font", "Arial", StringKind::Font},
+            {"color", "Color", "#ffffff", StringKind::Color},
+        };
+        r.push_back(std::move(text));
+
+        // Regular (non-fixed) effects, added from the Effects panel.
+        EffectDef color;
+        color.type = std::string(kColorEffect);
+        color.label = "Color Correction";
+        color.parameters = {
+            {"exposure", "Exposure", 0, DefaultKind::Constant, -4, 4, 0.1, 2, "EV", {}, true},
+            {"contrast", "Contrast", 0, DefaultKind::Constant, -100, 100, 1, 1, "", {}, true},
+            {"saturation", "Saturation", 100, DefaultKind::Constant, 0, 200, 1, 1, "%", {}, true},
+            {"temperature", "Temperature", 0, DefaultKind::Constant, -100, 100, 1, 1, "", {}, true},
+        };
+        r.push_back(std::move(color));
+
+        EffectDef lut;
+        lut.type = std::string(kLutEffect);
+        lut.label = "LUT";
+        lut.parameters = {
+            {"intensity", "Intensity", 100, DefaultKind::Constant, 0, 100, 1, 1, "%", {}, true},
+        };
+        lut.strings = {{"file", "LUT File (.cube)", "", StringKind::File}};
+        r.push_back(std::move(lut));
         return r;
     }();
     return kRegistry;
@@ -132,8 +182,27 @@ Effect makeEffect(std::string_view type, const MediaInfo& media, const SequenceS
         for (const auto& p : def->parameters) {
             e.parameters.push_back({p.key, defaultValue(p, media, settings), {}});
         }
+        for (const auto& s : def->strings) {
+            e.strings[s.key] = s.defaultValue;
+        }
     }
     return e;
+}
+
+std::string effectiveString(const Clip& clip, std::string_view effectType, std::string_view key) {
+    const std::string k(key);
+    if (const auto* effect = findEffectByType(clip, effectType); effect != nullptr && effect->enabled) {
+        if (const auto it = effect->strings.find(k); it != effect->strings.end()) {
+            return it->second;
+        }
+    }
+    const auto* def = findEffectDef(effectType);
+    const auto* sdef = def != nullptr ? def->stringParameter(key) : nullptr;
+    return sdef != nullptr ? sdef->defaultValue : std::string();
+}
+
+bool fixedEffectApplies(const EffectDef& def, TrackKind kind, std::string_view generator) noexcept {
+    return def.fixed && def.kind == kind && (def.generator.empty() || def.generator == generator);
 }
 
 ClipTransform resolveTransform(const Clip& clip, const Rational& t, const MediaInfo& media,

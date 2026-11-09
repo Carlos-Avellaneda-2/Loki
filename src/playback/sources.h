@@ -2,8 +2,11 @@
 
 #include "audio/mixer.h"
 #include "media/video_frame.h"
+#include "model/project.h"
+#include "model/transitions.h"
 #include "model/types.h"
 #include "render/composite.h"
+#include "text/title_renderer.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -134,6 +137,11 @@ public:
 
 private:
     media::VideoDecoder* decoderFor(const model::Clip& clip, const model::MediaItem& media);
+    // Picture of `clip` at sequence time `t` with Motion/Opacity, color, LUT resolved. `t` may be
+    // outside the clip (transition handles): the source time is clamped (freeze frame, D19).
+    std::optional<render::Layer> layerFor(const model::Clip& clip, const Rational& t);
+    media::VideoFramePtr titleFrame(const model::Clip& clip, const Rational& sourceTime);
+    std::shared_ptr<const render::Lut3D> lutFor(const std::string& path);
 
     std::shared_ptr<const SequenceSnapshot> m_snapshot;
     bool m_allowHardware;
@@ -143,7 +151,17 @@ private:
     Rational m_next;
     std::list<std::pair<model::ClipId, std::unique_ptr<media::VideoDecoder>>> m_decoders; // LRU
     std::unordered_set<model::MediaId> m_offline;
+    struct CachedTitle {
+        text::TitleSpec spec;
+        media::VideoFramePtr frame;
+    };
+    std::unordered_map<model::ClipId, CachedTitle> m_titles;
+    std::unordered_map<std::string, std::shared_ptr<const render::Lut3D>> m_luts; // null = failed to load
 };
+
+// Copies a sequence and the media its clips use (null if the sequence does not exist).
+[[nodiscard]] std::shared_ptr<SequenceSnapshot> makeSnapshot(const model::Project& project, model::SequenceId id,
+                                                             std::uint64_t generation);
 
 // True when `a` and `b` differ at most in audio mix settings (track volume/pan/mute/solo, master,
 // clip Volume/Panner effects, fades): playback can then keep its decoders and buffers.
@@ -169,7 +187,7 @@ private:
     };
 
     void mixClip(const model::Clip& clip, const model::MediaItem& media, std::int64_t segStart, std::int64_t segEnd,
-                 std::int64_t blockStart, float* bus);
+                 std::int64_t blockStart, float* bus, const std::vector<model::TransitionSpan>& spans);
 
     std::shared_ptr<const SequenceSnapshot> m_snapshot;
     int m_rate;

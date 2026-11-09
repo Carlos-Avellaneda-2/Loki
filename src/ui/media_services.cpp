@@ -109,8 +109,8 @@ QImage MediaServices::thumbnail(const model::MediaItem& item) {
     if (const auto it = m_thumbnails.constFind(key); it != m_thumbnails.cend()) {
         return *it;
     }
-    if (m_pendingThumbnails.contains(key)) {
-        return {};
+    if (item.isGenerated() || m_pendingThumbnails.contains(key)) {
+        return {}; // generated media (titles) have no file to thumbnail
     }
     m_pendingThumbnails.insert(key);
     const auto cacheRoot = m_cache->root();
@@ -161,7 +161,7 @@ std::shared_ptr<const media::Waveform> MediaServices::waveform(const model::Medi
     if (const auto it = m_waveforms.constFind(key); it != m_waveforms.cend()) {
         return *it;
     }
-    if (m_pendingWaveforms.contains(key)) {
+    if (item.isGenerated() || m_pendingWaveforms.contains(key)) {
         return nullptr;
     }
     m_pendingWaveforms.insert(key);
@@ -215,7 +215,9 @@ void MediaServices::importPaths(const QStringList& paths, model::BinId bin) {
 
     std::set<std::filesystem::path> existing;
     for (const auto& m : m_controller.project().media()) {
-        existing.insert(m.path.lexically_normal());
+        if (!m.isGenerated()) {
+            existing.insert(m.path.lexically_normal());
+        }
     }
     std::vector<std::filesystem::path> roots;
     for (const auto& p : paths) {

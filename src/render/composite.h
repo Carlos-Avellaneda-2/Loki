@@ -2,6 +2,7 @@
 
 #include "media/video_frame.h"
 #include "model/effect_registry.h"
+#include "render/grading.h"
 
 #include <array>
 #include <memory>
@@ -20,6 +21,8 @@ struct Layer {
     double sourceWidth = 0;
     double sourceHeight = 0;
     model::ClipTransform transform;
+    LayerGrade grade; // color correction, LUT, dip to black (Phase 9)
+    WipeMask wipe;    // wipe transition mask (canvas space)
 };
 
 // Layers bottom (index 0, V1) to top, composited over black in a width x height canvas.

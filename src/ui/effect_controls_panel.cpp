@@ -1,5 +1,13 @@
 #include "ui/effect_controls_panel.h"
 
+#include "commands/transition_commands.h"
+#include "model/transitions.h"
+
+#include <QColorDialog>
+#include <QFileDialog>
+#include <QFontComboBox>
+#include <QLineEdit>
+
 #include "commands/effect_commands.h"
 #include "ui/project_controller.h"
 
@@ -62,7 +70,20 @@ EffectControlsPanel::EffectControlsPanel(ProjectController& controller, QWidget*
             setClip({});
             return;
         }
+        if (m_transition && e.kind == model::ChangeKind::TrackChanged) {
+            if (m_controller.project().findTransition(m_transition).transition == nullptr) {
+                setTransition({});
+            } else {
+                m_lastPlayhead = Rational(-1);
+                refreshValues();
+            }
+            return;
+        }
         if (e.kind == model::ChangeKind::ClipChanged || e.kind == model::ChangeKind::ClipAdded) {
+            if (const auto* c = currentClip(); c != nullptr && effectTypesFor(*c) != m_shownTypes) {
+                rebuild(); // an effect was applied or removed
+                return;
+            }
             m_lastPlayhead = Rational(-1); // force a value refresh
             refreshValues();
         }
@@ -79,11 +100,103 @@ const model::Clip* EffectControlsPanel::currentClip() const {
 }
 
 void EffectControlsPanel::setClip(model::ClipId clip) {
-    if (clip == m_clip && !m_rows.empty()) {
+    if (clip == m_clip && !m_rows.empty() && !m_transition) {
         return;
     }
+    m_transition = {};
     m_clip = clip;
     rebuild();
+}
+
+void EffectControlsPanel::setTransition(model::TransitionId transition) {
+    m_transition = transition;
+    m_clip = {};
+    rebuild();
+}
+
+std::vector<std::string> EffectControlsPanel::effectTypesFor(const model::Clip& c) const {
+    std::vector<std::string> out;
+    const auto ref = m_controller.project().findClip(c.id);
+    const auto* media = m_controller.project().findMedia(c.media);
+    const std::string generator = media != nullptr ? media->generator : std::string();
+    for (const auto& def : model::effectRegistry()) {
+        if (ref.track != nullptr && model::fixedEffectApplies(def, ref.track->kind, generator)) {
+            out.push_back(def.type);
+        }
+    }
+    for (const auto& e : c.effects) {
+        const auto* def = model::findEffectDef(e.type);
+        if (def != nullptr && !def->fixed && std::find(out.begin(), out.end(), e.type) == out.end()) {
+            out.push_back(e.type);
+        }
+    }
+    return out;
+}
+
+void EffectControlsPanel::setString(const std::string& effectType, const std::string& key, const std::string& value) {
+    try {
+        run(commands::setEffectString(m_controller.project(), m_clip, effectType, key, value));
+    } catch (const std::exception& e) {
+        emit m_controller.commandFailed(QString::fromUtf8(e.what()));
+    }
+}
+
+void EffectControlsPanel::rebuildTransition() {
+    const auto ref = m_controller.project().findTransition(m_transition);
+    if (ref.transition == nullptr) {
+        m_title->setText(tr("(no clip selected)"));
+        return;
+    }
+    const auto* def = model::findTransitionDef(ref.transition->type);
+    m_title->setText(def != nullptr ? QString::fromUtf8(def->label.data(), static_cast<qsizetype>(def->label.size()))
+                                    : qs(ref.transition->type));
+    auto* group = new QWidget(m_body);
+    auto* grid = new QGridLayout(group);
+    grid->setContentsMargins(0, 6, 0, 2);
+    const Rational rate = ref.sequence->settings.frameRate;
+    grid->addWidget(new QLabel(tr("Duration"), group), 0, 0);
+    m_transitionDuration = new QDoubleSpinBox(group);
+    m_transitionDuration->setRange(1, 100000);
+    m_transitionDuration->setDecimals(0);
+    m_transitionDuration->setSuffix(tr(" frames"));
+    m_transitionDuration->setKeyboardTracking(false);
+    grid->addWidget(m_transitionDuration, 0, 1);
+    connect(m_transitionDuration, &QDoubleSpinBox::valueChanged, this, [this, rate](double frames) {
+        if (m_updating) {
+            return;
+        }
+        try {
+            run(commands::setTransitionDuration(m_controller.project(), m_transition,
+                                                framesToTime(static_cast<std::int64_t>(frames), rate),
+                                                gestureFor(m_transitionDuration)));
+        } catch (const std::exception& e) {
+            emit m_controller.commandFailed(QString::fromUtf8(e.what()));
+        }
+    });
+    grid->addWidget(new QLabel(tr("Alignment"), group), 1, 0);
+    m_transitionAlignment = new QComboBox(group);
+    m_transitionAlignment->addItems({tr("Center at Cut"), tr("Start at Cut"), tr("End at Cut")});
+    grid->addWidget(m_transitionAlignment, 1, 1);
+    connect(m_transitionAlignment, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (!m_updating) {
+            try {
+                run(commands::setTransitionAlignment(m_controller.project(), m_transition,
+                                                     static_cast<model::TransitionAlignment>(index)));
+            } catch (const std::exception& e) {
+                emit m_controller.commandFailed(QString::fromUtf8(e.what()));
+            }
+        }
+    });
+    auto* remove = new QToolButton(group);
+    remove->setText(tr("Remove"));
+    connect(remove, &QToolButton::clicked, this, [this] {
+        run(std::make_unique<commands::RemoveTransitionCommand>(m_transition));
+    });
+    grid->addWidget(remove, 2, 1, Qt::AlignRight);
+    grid->setColumnStretch(2, 1);
+    m_bodyLayout->insertWidget(0, group);
+    m_lastPlayhead = Rational(-1);
+    refreshValues();
 }
 
 Rational EffectControlsPanel::playheadSourceTime() const {
@@ -195,28 +308,32 @@ void EffectControlsPanel::rebuild() {
         delete item; // NOLINT(cppcoreguidelines-owning-memory): QLayout::takeAt transfers ownership
     }
     m_rows.clear();
+    m_shownTypes.clear();
+    m_transitionDuration = nullptr;
+    m_transitionAlignment = nullptr;
+    if (m_transition) {
+        rebuildTransition();
+        return;
+    }
     const auto* c = currentClip();
     if (c == nullptr) {
         m_title->setText(tr("(no clip selected)"));
         return;
     }
-    const auto ref = m_controller.project().findClip(m_clip);
-    const auto kind = ref.track->kind;
     const auto* media = m_controller.project().findMedia(c->media);
     m_title->setText(qs(c->name.empty() && media != nullptr ? media->name : c->name));
 
     int insertAt = 0;
-    for (const auto& def : model::effectRegistry()) {
-        if (!def.fixed || def.kind != kind) {
-            continue; // Motion/Opacity on video clips, Volume/Panner on audio clips
-        }
+    m_shownTypes = effectTypesFor(*c);
+    for (const auto& shownType : m_shownTypes) {
+        const auto& def = *model::findEffectDef(shownType);
         auto* group = new QWidget(m_body);
         auto* grid = new QGridLayout(group);
         grid->setContentsMargins(0, 6, 0, 2);
         grid->setHorizontalSpacing(4);
         auto* header = new QLabel(QStringLiteral("<b>%1</b>").arg(qs(def.label)), group);
         auto* reset = new QToolButton(group);
-        reset->setText(tr("Reset"));
+        reset->setText(def.fixed ? tr("Reset") : tr("Remove"));
         reset->setAutoRaise(true);
         const std::string type = def.type;
         connect(reset, &QToolButton::clicked, this, [this, type] { resetEffect(type); });
@@ -297,6 +414,70 @@ void EffectControlsPanel::rebuild() {
             m_rows.push_back(row);
             ++r;
         }
+        for (const auto& sdef : def.strings) {
+            Row row;
+            row.effectType = def.type;
+            row.key = sdef.key;
+            row.stringDef = &sdef;
+            const std::string key = sdef.key;
+            grid->addWidget(new QLabel(qs(sdef.label), group), r, 1);
+            switch (sdef.kind) {
+            case model::StringKind::Font: {
+                row.font = new QFontComboBox(group);
+                connect(row.font, &QFontComboBox::currentFontChanged, this, [this, type, key](const QFont& f) {
+                    if (!m_updating) {
+                        setString(type, key, f.family().toStdString());
+                    }
+                });
+                grid->addWidget(row.font, r, 2, 1, 5);
+                break;
+            }
+            case model::StringKind::Color: {
+                row.color = new QToolButton(group);
+                row.color->setToolTip(tr("Choose color"));
+                row.color->setMinimumWidth(48);
+                auto* button = row.color;
+                connect(row.color, &QToolButton::clicked, this, [this, type, key, button] {
+                    const QColor current(button->property("lokiColor").toString());
+                    const QColor chosen = QColorDialog::getColor(current, this, tr("Text Color"));
+                    if (chosen.isValid()) {
+                        setString(type, key, chosen.name().toStdString());
+                    }
+                });
+                grid->addWidget(row.color, r, 2);
+                break;
+            }
+            case model::StringKind::File: {
+                row.line = new QLineEdit(group);
+                row.line->setReadOnly(true);
+                auto* browse = new QToolButton(group);
+                browse->setText(QStringLiteral("..."));
+                connect(browse, &QToolButton::clicked, this, [this, type, key] {
+                    const QString file = QFileDialog::getOpenFileName(this, tr("Choose LUT"), QString(),
+                                                                      tr("Cube LUT (*.cube)"));
+                    if (!file.isEmpty()) {
+                        setString(type, key, file.toStdString());
+                    }
+                });
+                grid->addWidget(row.line, r, 2, 1, 4);
+                grid->addWidget(browse, r, 6, Qt::AlignLeft);
+                break;
+            }
+            case model::StringKind::Text: {
+                row.line = new QLineEdit(group);
+                auto* line = row.line;
+                connect(row.line, &QLineEdit::editingFinished, this, [this, type, key, line] {
+                    if (!m_updating) {
+                        setString(type, key, line->text().toStdString());
+                    }
+                });
+                grid->addWidget(row.line, r, 2, 1, 5);
+                break;
+            }
+            }
+            m_rows.push_back(row);
+            ++r;
+        }
         grid->setColumnStretch(6, 1);
         m_bodyLayout->insertWidget(insertAt++, group);
     }
@@ -305,6 +486,21 @@ void EffectControlsPanel::rebuild() {
 }
 
 void EffectControlsPanel::refreshValues() {
+    if (m_transition) {
+        const auto ref = m_controller.project().findTransition(m_transition);
+        if (ref.transition == nullptr || m_transitionDuration == nullptr || m_lastPlayhead == Rational(0)) {
+            return;
+        }
+        m_lastPlayhead = Rational(0);
+        m_updating = true;
+        if (!m_transitionDuration->hasFocus()) {
+            m_transitionDuration->setValue(static_cast<double>(
+                timeToFrames(ref.transition->duration, ref.sequence->settings.frameRate, Rounding::Nearest)));
+        }
+        m_transitionAlignment->setCurrentIndex(static_cast<int>(ref.transition->alignment));
+        m_updating = false;
+        return;
+    }
     const auto* c = currentClip();
     if (c == nullptr) {
         return;
@@ -317,6 +513,20 @@ void EffectControlsPanel::refreshValues() {
     const auto ctx = commands::clipContext(m_controller.project(), m_clip);
     m_updating = true;
     for (auto& row : m_rows) {
+        if (row.stringDef != nullptr) {
+            const auto text = QString::fromStdString(model::effectiveString(*c, row.effectType, row.key));
+            if (row.line != nullptr && !row.line->hasFocus() && row.line->text() != text) {
+                row.line->setText(text);
+            }
+            if (row.font != nullptr && row.font->currentFont().family() != text) {
+                row.font->setCurrentFont(QFont(text));
+            }
+            if (row.color != nullptr) {
+                row.color->setProperty("lokiColor", text);
+                row.color->setStyleSheet(QStringLiteral("background-color: %1;").arg(text));
+            }
+            continue;
+        }
         const double value = model::effectiveValue(*c, row.effectType, row.key, now, ctx.media, ctx.settings);
         const auto* effect = model::findEffectByType(*c, row.effectType);
         const auto* p = effect != nullptr ? effect->findParameter(row.key) : nullptr;

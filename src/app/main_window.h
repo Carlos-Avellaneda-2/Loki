@@ -14,6 +14,7 @@ class QSettings;
 
 namespace loki::ui {
 class AudioMetersPanel;
+class EffectsPanel;
 class AudioMixerPanel;
 class MediaServices;
 class ProjectController;
@@ -42,7 +43,7 @@ class MainWindow final : public QMainWindow {
 
 public:
     // Bump when the default panel set changes so stale saved layouts are ignored.
-    static constexpr int kLayoutVersion = 2; // 2: Audio Track Mixer panel
+    static constexpr int kLayoutVersion = 3; // 2: Audio Track Mixer panel, 3: Effects panel
 
     // playbackOptions: tests inject a fake audio device / clock.
     explicit MainWindow(QWidget* parent = nullptr, playback::PlaybackOptions playbackOptions = {});
@@ -73,6 +74,9 @@ public:
     [[nodiscard]] ui::timeline::TimelinePanel* timeline() const noexcept { return m_timeline; }
     [[nodiscard]] ui::AudioMetersPanel* audioMeters() const noexcept { return m_audioMeters; }
     [[nodiscard]] ui::AudioMixerPanel* audioMixer() const noexcept { return m_audioMixer; }
+    [[nodiscard]] ui::EffectsPanel* effectsPanel() const noexcept { return m_effects; }
+    // File > New > Title: a title clip at the Program playhead on the targeted video track.
+    void newTitle();
     [[nodiscard]] model::SequenceId activeSequence() const noexcept { return m_activeSequence; }
     // Insert/Overwrite from the Source Monitor at the Program playhead (public for tests).
     void sourceEdit(model::MediaId media, bool insert);
@@ -103,6 +107,7 @@ private:
     ui::timeline::TimelinePanel* m_timeline = nullptr;  // owned by its dock widget
     ui::AudioMetersPanel* m_audioMeters = nullptr;      // owned by its dock widget
     ui::AudioMixerPanel* m_audioMixer = nullptr;        // owned by its dock widget
+    ui::EffectsPanel* m_effects = nullptr;              // owned by its dock widget
     model::SequenceId m_activeSequence;
     playback::PlaybackOptions m_playbackOptions;
     ads::CDockManager* m_dockManager = nullptr;    // owned by this window (Qt parent)

@@ -7,6 +7,10 @@ add_library(loki_render_core STATIC
     color_conversion.cpp
     composite.h
     composite.cpp
+    cpu_compositor.h
+    cpu_compositor.cpp
+    grading.h
+    grading.cpp
 )
 add_library(loki::render_core ALIAS loki_render_core)
 target_include_directories(loki_render_core PUBLIC "${PROJECT_SOURCE_DIR}/src")

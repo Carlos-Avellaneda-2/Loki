@@ -1,6 +1,7 @@
 // Runs the real OpenGL compositor and compares its output with the CPU reference. Needs a GPU with
 // OpenGL 3.3 (skipped otherwise, e.g. on CI runners without a GPU). This executable runs on the
 // native "windows" platform instead of "offscreen" (see tests/CMakeLists.txt).
+#include "render/cpu_compositor.h"
 #include "render/gl_compositor.h"
 
 #include <QGuiApplication>
@@ -132,6 +133,35 @@ TEST_F(GlCompositorTest, RenderAtReducedSizeScalesTheCanvas) {
     ASSERT_EQ(img.width(), 32);
     EXPECT_EQ(at(img, 4, 9), QColor(0, 255, 0));
     EXPECT_EQ(at(img, 28, 9), QColor(0, 0, 0));
+}
+
+TEST_F(GlCompositorTest, GradingWipeLutAndAlphaMatchCpuCompositor) {
+    std::string cube = "LUT_3D_SIZE 2\n";
+    for (int b = 0; b < 2; ++b) {
+        for (int g = 0; g < 2; ++g) {
+            for (int r = 0; r < 2; ++r) {
+                cube += std::to_string(1 - r) + " " + std::to_string(g) + " " + std::to_string(b) + "\n";
+            }
+        }
+    }
+    auto base = layerOf(solid(64, 32, 180, 90, 40), 32, 16);
+    base.grade.color = {0.5f, 20.0f, 60.0f, 30.0f};
+    base.grade.lut = render::parseCubeLut(cube);
+    base.grade.lutMix = 0.7f;
+    auto top = layerOf(solid(64, 32, 20, 200, 120), 32, 16, 80.0);
+    top.wipe = {true, 0.5f, 0.05f, false};
+    top.grade.dim = 0.3f;
+    render::CompositeFrame frame{64, 32, {base, top}};
+    compositor.render(frame, 64, 32);
+    const auto img = compositor.readback();
+    const auto cpu = render::compositeCpu(frame, 64, 32);
+    for (const int x : {4, 20, 44, 60}) {
+        const auto expected = cpu.pixel(x, 16);
+        const auto got = at(img, x, 16);
+        EXPECT_NEAR(got.red(), expected[0], 3) << "x " << x;
+        EXPECT_NEAR(got.green(), expected[1], 3) << "x " << x;
+        EXPECT_NEAR(got.blue(), expected[2], 3) << "x " << x;
+    }
 }
 
 } // namespace

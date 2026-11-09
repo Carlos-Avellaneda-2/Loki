@@ -16,6 +16,10 @@ inline constexpr std::string_view kOpacityEffect = "loki.opacity";
 // Audio fixed effects (D15): clip level in dB and pan/balance (-100 L .. 100 R).
 inline constexpr std::string_view kVolumeEffect = "loki.volume";
 inline constexpr std::string_view kPannerEffect = "loki.panner";
+// Phase 9 (D20): color correction, LUT (.cube) and the title text of generated title clips.
+inline constexpr std::string_view kColorEffect = "loki.color";
+inline constexpr std::string_view kLutEffect = "loki.lut";
+inline constexpr std::string_view kTextEffect = "loki.text";
 // Levels at or below this many dB are silence (-inf).
 inline constexpr double kSilenceDb = -96.0;
 
@@ -46,11 +50,24 @@ struct ParameterDef {
     bool animatable = true;
 };
 
+// Non-animatable text parameter (stored in Effect::strings).
+enum class StringKind { Text, Font, Color, File };
+struct StringParameterDef {
+    std::string key;
+    std::string label;
+    std::string defaultValue;
+    StringKind kind = StringKind::Text;
+};
+
 struct EffectDef {
     std::string type;
     std::string label;
     bool fixed = false; // shown on every clip of `kind` (Motion/Opacity on video, Volume/Panner on audio)
     TrackKind kind = TrackKind::Video;
+    // Fixed effects with a generator only appear on clips of that generated media (Text on titles).
+    std::string generator;
+    std::vector<StringParameterDef> strings;
+    [[nodiscard]] const StringParameterDef* stringParameter(std::string_view key) const noexcept;
     std::vector<ParameterDef> parameters;
 
     [[nodiscard]] const ParameterDef* parameter(std::string_view key) const noexcept;
@@ -67,6 +84,12 @@ struct EffectDef {
 [[nodiscard]] double effectiveValue(const Clip& clip, std::string_view effectType, std::string_view key,
                                     const Rational& sourceTime, const MediaInfo& media,
                                     const SequenceSettings& settings);
+
+// Effective text parameter: the stored string or the default.
+[[nodiscard]] std::string effectiveString(const Clip& clip, std::string_view effectType, std::string_view key);
+
+// Whether a fixed effect applies to a clip on a track of `kind` whose media has `generator`.
+[[nodiscard]] bool fixedEffectApplies(const EffectDef& def, TrackKind kind, std::string_view generator) noexcept;
 
 // The clip's effect of `type` (first one), if stored.
 [[nodiscard]] const Effect* findEffectByType(const Clip& clip, std::string_view type) noexcept;

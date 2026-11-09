@@ -10,6 +10,8 @@ add_library(loki_commands STATIC
     edit_commands.cpp
     project_commands.h
     project_commands.cpp
+    transition_commands.h
+    transition_commands.cpp
     undo_stack.h
     undo_stack.cpp
 )

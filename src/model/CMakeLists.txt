@@ -9,6 +9,8 @@ add_library(loki_model STATIC
     project.cpp
     project_json.h
     project_json.cpp
+    transitions.h
+    transitions.cpp
     types.h
 )
 add_library(loki::model ALIAS loki_model)

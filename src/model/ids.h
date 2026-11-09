@@ -44,6 +44,7 @@ using TrackId = Id<struct TrackTag>;
 using ClipId = Id<struct ClipTag>;
 using EffectId = Id<struct EffectTag>;
 using LinkId = Id<struct LinkTag>;
+using TransitionId = Id<struct TransitionTag>;
 
 } // namespace loki::model
 

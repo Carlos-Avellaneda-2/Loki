@@ -13,6 +13,8 @@
 
 class QComboBox;
 class QDoubleSpinBox;
+class QFontComboBox;
+class QLineEdit;
 class QLabel;
 class QTimer;
 class QToolButton;
@@ -41,6 +43,9 @@ public:
     void setPlayhead(Playhead playhead) { m_playhead = std::move(playhead); }
     void setClip(model::ClipId clip);
     [[nodiscard]] model::ClipId clip() const noexcept { return m_clip; }
+    // Shows a transition (duration, alignment) instead of a clip.
+    void setTransition(model::TransitionId transition);
+    [[nodiscard]] model::TransitionId transition() const noexcept { return m_transition; }
 
     // Clip source time at the playhead (clamped into the clip) - the keyframe time base.
     [[nodiscard]] Rational playheadSourceTime() const;
@@ -53,6 +58,7 @@ public:
     void toggleKeyframe(const std::string& effectType, const std::string& key);
     void jumpKeyframe(const std::string& effectType, const std::string& key, bool forward);
     void resetEffect(const std::string& effectType);
+    void setString(const std::string& effectType, const std::string& key, const std::string& value);
     // Effect types shown for the current clip, in order (tests).
     [[nodiscard]] std::vector<std::string> shownEffects() const;
 
@@ -65,7 +71,14 @@ private:
         QDoubleSpinBox* spin = nullptr;
         QComboBox* combo = nullptr;
         KeyframeLane* lane = nullptr;
+        // Text parameters.
+        const model::StringParameterDef* stringDef = nullptr;
+        QLineEdit* line = nullptr;
+        QFontComboBox* font = nullptr;
+        QToolButton* color = nullptr;
     };
+    [[nodiscard]] std::vector<std::string> effectTypesFor(const model::Clip& clip) const;
+    void rebuildTransition();
 
     void rebuild();
     [[nodiscard]] const model::Clip* currentClip() const;
@@ -79,6 +92,10 @@ private:
     QWidget* m_body = nullptr;
     QVBoxLayout* m_bodyLayout = nullptr;
     std::vector<Row> m_rows;
+    std::vector<std::string> m_shownTypes;
+    model::TransitionId m_transition;
+    QDoubleSpinBox* m_transitionDuration = nullptr;
+    QComboBox* m_transitionAlignment = nullptr;
     QTimer* m_timer = nullptr;
     Rational m_lastPlayhead{-1};
     bool m_updating = false;

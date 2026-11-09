@@ -1,6 +1,9 @@
 #include "ui/timeline/timeline_view.h"
 
 #include "commands/effect_commands.h"
+#include "commands/transition_commands.h"
+#include "model/transitions.h"
+#include "ui/effects_panel.h"
 #include "commands/project_commands.h"
 #include "model/effect_registry.h"
 #include "ui/audio_scale.h"
@@ -261,11 +264,13 @@ void TimelineView::paintEvent(QPaintEvent*) {
 
     p.save();
     p.setClipRect(content);
+    m_transitionRects.clear();
     for (const auto& row : rowList) {
         p.fillRect(QRect(kHeaderWidth, row.top, content.width(), row.height),
                    (row.index % 2 == 0) ? kRowA : kRowB);
         if (const auto* track = trackOf(row)) {
             paintTrackClips(p, row, *track);
+            paintTransitions(p, row, *track);
         }
         p.setPen(QColor(0x18, 0x18, 0x18));
         p.drawLine(kHeaderWidth, row.top + row.height - 1, width(), row.top + row.height - 1);
@@ -460,6 +465,136 @@ void TimelineView::paintClip(QPainter& p, const QRectF& r, const model::Clip& cl
         p.setBrush(Qt::NoBrush);
         p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
     }
+}
+
+void TimelineView::paintTransitions(QPainter& p, const TrackRow& row, const model::Track& track) {
+    for (const auto& t : track.transitions) {
+        const auto span = model::transitionSpan(track, t);
+        if (!span) {
+            continue;
+        }
+        const double x0 = kHeaderWidth + timeToX(span->start, m_metrics);
+        const double x1 = kHeaderWidth + timeToX(span->end, m_metrics);
+        const QRectF r(x0, row.top + 2, std::max(4.0, x1 - x0), std::min(16.0, row.height - 5.0));
+        m_transitionRects.emplace_back(r, t.id);
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.fillRect(r, QColor(0xd0, 0xb0, 0xf0, 200));
+        p.setPen(QColor(0x30, 0x20, 0x40));
+        p.drawLine(r.bottomLeft(), r.topRight());
+        if (t.id == m_selectedTransition) {
+            p.setPen(QPen(Qt::white, 1.5));
+            p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
+        }
+        if (r.width() > 60) {
+            QFont f = p.font();
+            f.setPointSizeF(7.5);
+            p.setFont(f);
+            p.setPen(Qt::black);
+            const auto* def = model::findTransitionDef(t.type);
+            p.drawText(r.adjusted(3, 0, -2, 0), Qt::AlignVCenter | Qt::AlignLeft,
+                       def != nullptr ? QString::fromUtf8(def->label.data(), static_cast<qsizetype>(def->label.size()))
+                                      : qs(t.type));
+        }
+        p.restore();
+    }
+}
+
+void TimelineView::selectTransition(model::TransitionId id) {
+    m_selectedTransition = id;
+    if (id) {
+        m_selection.clear();
+        emit selectionChanged();
+    }
+    emit transitionSelected(id);
+    update();
+}
+
+void TimelineView::applyTransitionAtPlayhead(const std::string& type) {
+    const auto* seq = sequence();
+    const auto* def = model::findTransitionDef(type);
+    if (seq == nullptr || def == nullptr) {
+        return;
+    }
+    // Premiere: the edit point nearest the playhead on the targeted track of that kind.
+    const auto targetId = def->kind == model::TrackKind::Video ? m_targetVideo : m_targetAudio;
+    const auto& tracks = seq->tracks(def->kind);
+    const model::Track* track = nullptr;
+    for (const auto& t : tracks) {
+        if (t.id == targetId || (!targetId && track == nullptr)) {
+            track = &t;
+        }
+    }
+    if (track == nullptr || track->clips.empty()) {
+        emit statusMessage(tr("No clip on the targeted track"));
+        return;
+    }
+    const Rational now = playhead();
+    const model::Clip* best = nullptr;
+    commands::ClipEdge edge = commands::ClipEdge::In;
+    Rational bestDistance;
+    for (const auto& c : track->clips) {
+        for (const auto e : {commands::ClipEdge::In, commands::ClipEdge::Out}) {
+            const Rational at = e == commands::ClipEdge::In ? c.start : c.end();
+            const Rational distance = at > now ? at - now : now - at;
+            // At a cut prefer the left clip's Out edge (two-sided transition).
+            if (best == nullptr || distance < bestDistance || (distance == bestDistance && e == commands::ClipEdge::Out)) {
+                best = &c;
+                edge = e;
+                bestDistance = distance;
+            }
+        }
+    }
+    const auto clipId = best->id;
+    runEdit([&] { return commands::makeApplyTransition(m_controller.project(), clipId, edge, type); });
+}
+
+void TimelineView::applyEffectToSelection(const std::string& type) {
+    if (m_selection.empty()) {
+        emit statusMessage(tr("Select clips to apply the effect to"));
+        return;
+    }
+    std::vector<std::unique_ptr<commands::Command>> steps;
+    const auto* def = model::findEffectDef(type);
+    for (const auto id : m_selection) {
+        const auto ref = m_controller.project().findClip(id);
+        if (ref.clip != nullptr && def != nullptr && ref.track->kind == def->kind &&
+            model::findEffectByType(*ref.clip, type) == nullptr) {
+            steps.push_back(commands::applyEffect(m_controller.project(), id, type));
+        }
+    }
+    if (steps.empty()) {
+        emit statusMessage(tr("The selected clips already have this effect or do not accept it"));
+        return;
+    }
+    runEdit([&] { return std::make_unique<commands::MacroCommand>("Apply Effect", std::move(steps)); });
+}
+
+bool TimelineView::dropEffect(const QByteArray& payload, const QPoint& pos) {
+    const auto* seq = sequence();
+    const QString text = QString::fromUtf8(payload);
+    const bool transition = text.startsWith(QStringLiteral("transition:"));
+    const std::string type = text.section(QLatin1Char(':'), 1).toStdString();
+    if (seq == nullptr || type.empty()) {
+        return false;
+    }
+    const auto rowList = rows();
+    const auto hit = hitTest(*seq, rowList, m_metrics, contentX(pos.x()), pos.y());
+    if (!hit.clip) {
+        return false;
+    }
+    const auto ref = m_controller.project().findClip(hit.clip);
+    if (transition) {
+        // Nearer half of the clip decides the edge.
+        const Rational at = timeAt(pos.x());
+        const auto edge = (at - ref.clip->start) < (ref.clip->end() - at) ? commands::ClipEdge::In : commands::ClipEdge::Out;
+        const auto clipId = hit.clip;
+        runEdit([&] { return commands::makeApplyTransition(m_controller.project(), clipId, edge, type); });
+    } else {
+        const auto clipId = hit.clip;
+        runEdit([&] { return commands::applyEffect(m_controller.project(), clipId, type); });
+    }
+    return true;
 }
 
 QRectF TimelineView::clipRect(const TrackRow& row, const model::Clip& clip) const {
@@ -740,6 +875,17 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
     if (pos.x() < kHeaderWidth) {
         headerClick(*row, pos);
         return;
+    }
+    if (m_tool == Tool::Selection) {
+        for (const auto& [r, id] : m_transitionRects) {
+            if (r.contains(pos)) {
+                selectTransition(id);
+                return;
+            }
+        }
+    }
+    if (m_selectedTransition) {
+        selectTransition({});
     }
     if (const auto audioHit = audioHitAt(pos); audioHit.handle != AudioHandle::None) {
         const auto ref = m_controller.project().findClip(audioHit.clip);
@@ -1064,6 +1210,12 @@ void TimelineView::wheelEvent(QWheelEvent* event) {
 }
 
 void TimelineView::deleteSelection() {
+    if (m_selectedTransition) {
+        const auto id = m_selectedTransition;
+        selectTransition({});
+        runEdit([&] { return std::make_unique<commands::RemoveTransitionCommand>(id); });
+        return;
+    }
     if (m_selection.empty()) {
         return;
     }
@@ -1309,12 +1461,17 @@ std::optional<TimelineView::DropPreview> TimelineView::dropPreviewAt(const QMime
 }
 
 void TimelineView::dragEnterEvent(QDragEnterEvent* event) {
-    if (!ProjectItemModel::decodeMediaIds(event->mimeData()).empty()) {
+    if (!ProjectItemModel::decodeMediaIds(event->mimeData()).empty() ||
+        event->mimeData()->hasFormat(QString::fromLatin1(EffectsPanel::kMimeType))) {
         event->acceptProposedAction();
     }
 }
 
 void TimelineView::dragMoveEvent(QDragMoveEvent* event) {
+    if (event->mimeData()->hasFormat(QString::fromLatin1(EffectsPanel::kMimeType))) {
+        event->acceptProposedAction();
+        return;
+    }
     m_dropPreview = dropPreviewAt(event->mimeData(), event->position().toPoint());
     if (m_dropPreview) {
         event->acceptProposedAction();
@@ -1330,6 +1487,13 @@ void TimelineView::dragLeaveEvent(QDragLeaveEvent*) {
 }
 
 void TimelineView::dropEvent(QDropEvent* event) {
+    if (event->mimeData()->hasFormat(QString::fromLatin1(EffectsPanel::kMimeType))) {
+        if (dropEffect(event->mimeData()->data(QString::fromLatin1(EffectsPanel::kMimeType)),
+                       event->position().toPoint())) {
+            event->acceptProposedAction();
+        }
+        return;
+    }
     auto preview = dropPreviewAt(event->mimeData(), event->position().toPoint());
     m_dropPreview.reset();
     update();

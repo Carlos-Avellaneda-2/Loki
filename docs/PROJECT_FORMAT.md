@@ -1,4 +1,4 @@
-# Formato de proyecto `.loki` (versión 1)
+# Formato de proyecto `.loki` (versión 2)
 
 Archivo JSON en UTF-8. Lo escribe `model::saveProjectFile` y lo lee `model::loadProjectFile`
 (`src/model/project_json.*`).
@@ -83,3 +83,23 @@ Si algo falla se lanza `ProjectFormatError` con la ruta JSON del problema, por e
   2. Añadir el paso de migración.
   3. Añadir un archivo "golden" de la versión anterior en `tests/data/` con su test.
 - `tests/data/project_v1.loki` es el golden de la versión 1 y debe seguir abriendo siempre.
+- `tests/data/project_v2.loki` es el golden de la versión 2.
+
+## Versión 2 (Fase 9, D19–D20)
+
+La migración de v1 a v2 no cambia nada: un documento v1 ya es un v2 válido. Todo lo nuevo es opcional.
+
+- Medios generados: `"generator": "loki.title"`, con `"path": ""`. El renderer dibuja la imagen; no hay archivo.
+- Efectos con texto: `"strings": { "clave": "valor" }`, para parámetros que no se animan.
+  - `loki.text`: `text`, `font`, `color` (`#rrggbb`).
+  - `loki.lut`: `file` (ruta del `.cube`).
+- Efectos nuevos:
+  - `loki.color`: `exposure` (−4…4 EV), `contrast` (−100…100), `saturation` (0…200 %) y `temperature` (−100…100).
+  - `loki.lut`: `intensity` (0…100 %).
+  - `loki.text`: `size`, `positionX`, `positionY`, `shadow` (0/1), `shadowDistance` y `shadowOpacity`.
+- Pistas: `"transitions": [{ "id", "type", "from", "to", "duration", "alignment" }]`.
+  - `from`/`to`: el clip saliente y el entrante (`null` en una transición de un solo lado).
+  - `alignment`: `center`, `start` o `end` respecto del corte.
+  - `type`: `loki.crossDissolve`, `loki.dipToBlack`, `loki.wipe` o `loki.crossfade` (audio).
+  - Una transición cuyos clips ya no existen o ya no se tocan queda inactiva y se ignora. Las ediciones del
+    timeline la borran en el mismo paso de deshacer.

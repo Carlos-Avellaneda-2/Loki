@@ -73,6 +73,14 @@ public:
     void rippleDeleteSelection();
     void razorAtPlayhead(bool allTracks);
     void toggleLinkSelection();
+    // Transitions (D19): the selected transition, applying at the playhead (Ctrl+D / Ctrl+Shift+D),
+    // and effects from the Effects panel.
+    [[nodiscard]] model::TransitionId selectedTransition() const noexcept { return m_selectedTransition; }
+    void selectTransition(model::TransitionId id);
+    void applyTransitionAtPlayhead(const std::string& type);
+    void applyEffectToSelection(const std::string& type);
+    // Applies an Effects-panel drop payload ("effect:<type>" / "transition:<type>") at a widget point.
+    bool dropEffect(const QByteArray& payload, const QPoint& pos);
     // Clipboard (D18): copy / cut the selection, paste at the playhead on the target tracks.
     void copySelection();
     void cutSelection();
@@ -94,6 +102,7 @@ public:
 signals:
     void statusMessage(const QString& text);
     void selectionChanged();
+    void transitionSelected(loki::model::TransitionId id);
     void toolChanged(loki::ui::timeline::Tool tool);
     void snappingChanged(bool on);
     void zoomChanged(double pixelsPerSecond);
@@ -180,6 +189,10 @@ private:
     std::optional<Rational> m_snapIndicator;
     std::optional<DropPreview> m_dropPreview;
     commands::Clipboard m_clipboard;
+    model::TransitionId m_selectedTransition;
+    // Transition boxes painted in the last paintEvent (hit testing).
+    std::vector<std::pair<QRectF, model::TransitionId>> m_transitionRects;
+    void paintTransitions(QPainter& p, const TrackRow& row, const model::Track& track);
 };
 
 } // namespace loki::ui::timeline

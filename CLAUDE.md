@@ -45,6 +45,8 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - Keyframes en tiempo del *source* del clip. IDs = UUID (`model::Id<Tag>` tipado).
 - Audio: la matemática de mezcla vive en `audio/mixer` (pura); preview y export la comparten. Ediciones
   solo de mezcla no recargan el motor (`sameExceptAudioMix`): si se agrega un campo de mezcla, incluirlo ahí.
+- Render: toda fórmula nueva del shader (`GlCompositor`) debe existir igual en `render_core`
+  (`grading`, `cpu_compositor`) y tener test GPU vs CPU en `loki_gl_tests`.
 - Atajos: nunca `QShortcut`/`keyPressEvent` sueltos; registrar con `ShortcutManager::create/bind` (id estable
   `<panel>.<acción>`, contexto de panel o "Application", tecla por defecto Premiere). Sin conflictos por contexto
   (hay test que lo verifica). Los tests Qt usan settings aislados (org "LokiTests").
@@ -93,13 +95,16 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 6. Composición GPU y efectos — effect registry, CompositeFrame (render_core), GlCompositor ping-pong RGBA16F + 8 blend modes, Effect Controls con keyframes, 269 tests (+4 GPU)
 - [x] 7. Edición avanzada — ripple/roll/slip/slide, ripple delete, lift/extract con marcas In/Out de secuencia, link/unlink, ShortcutManager + diálogo de atajos, 285 tests
 - [x] 8. Audio — audio/mixer puro, SequenceAudioSource multipista (vol/pan clip+pista, mute/solo, master, fades), medidores con reloj, Audio Meters + Audio Track Mixer, línea de volumen y fades en timeline, copiar/cortar/pegar, 313 tests
-- [ ] 9. Transiciones, color, títulos
+- [x] 9. Transiciones, color, títulos — formato v2 (transiciones en pista, medios generados, parámetros texto), disolución/fundido a negro/barrido + crossfade audio, Color/LUT .cube en shader, títulos QtGui, compositor CPU de referencia, panel Efectos, 331 tests
 - [ ] 10. Exportación
 - [ ] 11. Robustez y rendimiento
 
 - D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],
   UUID, ruta abs+rel); sin solapes en pista.
 
+- D19–D23 (Fases 9/10): transiciones en la pista (corte o borde, alineación, freeze sin handles); formato v2 con
+  migración; títulos con QtGui en módulo `loki_text`; compositor CPU de respaldo/referencia; HEVC solo por
+  hardware (nunca x265).
 - D15–D18 (Fase 8): Volumen/Paneo = efectos fijos de clip de audio; volumeDb/pan/solo de pista y
   masterVolumeDb opcionales en v1 (sin automatización de pista); fadeIn/fadeOut de clip (crossfade en
   Fase 9); copiar/cortar/pegar (Ctrl+C/X/V, Ctrl+Shift+V insertar).

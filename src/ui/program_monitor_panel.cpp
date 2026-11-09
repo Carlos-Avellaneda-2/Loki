@@ -186,20 +186,7 @@ void ProgramMonitorPanel::publishSnapshot() {
     if (seq == nullptr) {
         return;
     }
-    auto snapshot = std::make_shared<playback::SequenceSnapshot>();
-    snapshot->sequence = *seq;
-    for (const auto* list : {&seq->videoTracks, &seq->audioTracks}) {
-        for (const auto& track : *list) {
-            for (const auto& clip : track.clips) {
-                if (!snapshot->media.contains(clip.media)) {
-                    if (const auto* media = project.findMedia(clip.media)) {
-                        snapshot->media.emplace(clip.media, *media);
-                    }
-                }
-            }
-        }
-    }
-    snapshot->generation = ++m_generation;
+    auto snapshot = playback::makeSnapshot(project, m_sequence, ++m_generation);
     m_title->setText(qs(seq->name));
     m_scrub->setTiming(seq->duration(), seq->settings.frameRate);
     m_scrub->setMarks(seq->markIn, seq->markOut);

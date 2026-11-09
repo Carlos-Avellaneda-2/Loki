@@ -8,6 +8,7 @@
 #include <QOpenGLVertexArrayObject>
 
 #include <array>
+#include <map>
 #include <vector>
 
 namespace loki::render {
@@ -49,6 +50,14 @@ private:
 
     void ensureTargets(int width, int height);
     void uploadLayer(std::size_t slot, const media::VideoFrame& frame);
+    unsigned int lutTextureFor(const std::shared_ptr<const Lut3D>& lut);
+
+    struct LutTexture {
+        std::shared_ptr<const Lut3D> lut;
+        unsigned int texture = 0;
+        bool usedThisFrame = false;
+    };
+    std::map<const Lut3D*, LutTexture> m_luts;
 
     QOpenGLShaderProgram m_layerProgram;
     QOpenGLShaderProgram m_presentProgram;

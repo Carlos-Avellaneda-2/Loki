@@ -1,5 +1,8 @@
 #include "commands/edit_commands.h"
 
+#include "commands/project_commands.h"
+#include "model/transitions.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -70,10 +73,39 @@ void ReplaceClipsCommand::apply(Project& project, const std::vector<PlacedClip>&
 
 void ReplaceClipsCommand::redo(Project& project) {
     apply(project, m_before, m_after);
+    // Transitions whose clips were removed or pulled apart are deleted with the edit (D19).
+    m_dropped.clear();
+    std::set<TrackId> tracks;
+    for (const auto* list : {&m_before, &m_after}) {
+        for (const auto& c : *list) {
+            tracks.insert(c.track);
+        }
+    }
+    auto mutator = mutate(project);
+    for (const auto trackId : tracks) {
+        const auto ref = project.findTrack(trackId);
+        if (ref.track == nullptr) {
+            continue;
+        }
+        std::vector<TransitionId> dormant;
+        for (const auto& t : ref.track->transitions) {
+            if (!isTransitionLive(*ref.track, t)) {
+                dormant.push_back(t.id);
+            }
+        }
+        for (const auto id : dormant) {
+            m_dropped.push_back({trackId, mutator.removeTransition(id)});
+        }
+    }
 }
 
 void ReplaceClipsCommand::undo(Project& project) {
     apply(project, m_after, m_before);
+    auto mutator = mutate(project);
+    for (auto it = m_dropped.rbegin(); it != m_dropped.rend(); ++it) {
+        mutator.addTransition(it->first, it->second);
+    }
+    m_dropped.clear();
 }
 
 bool ReplaceClipsCommand::mergeWith(const Command& next) {
@@ -97,6 +129,7 @@ bool ReplaceClipsCommand::mergeWith(const Command& next) {
     }
     after.insert(after.end(), other->m_after.begin(), other->m_after.end());
     m_after = std::move(after);
+    m_dropped.insert(m_dropped.end(), other->m_dropped.begin(), other->m_dropped.end());
     return true;
 }
 
@@ -945,6 +978,48 @@ std::unique_ptr<Command> makeUnlinkClips(const Project& project, SequenceId sequ
         }
     }
     return plan.build("Unlink");
+}
+
+// --- Titles -------------------------------------------------------------------------------------
+
+std::unique_ptr<Command> makeNewTitle(const Project& project, SequenceId sequence, TrackId track, const Rational& at,
+                                      const Rational& duration, std::string name, MediaId* titleMedia) {
+    EditPlan plan(project, sequence);
+    const auto& seq = plan.sequence();
+    const auto ref = project.findTrack(track);
+    if (ref.track == nullptr || ref.sequence != &seq || ref.track->kind != TrackKind::Video) {
+        throw CommandError("Titles go on a video track of the sequence");
+    }
+    if (plan.isLocked(track)) {
+        throw CommandError("Track is locked");
+    }
+    if (at.isNegative() || !duration.isPositive()) {
+        throw CommandError("Invalid title placement");
+    }
+    MediaItem media;
+    media.id = MediaId::generate();
+    media.name = std::move(name);
+    media.generator = std::string(kTitleGenerator);
+    media.info.hasVideo = true;
+    media.info.isStill = true;
+    media.info.width = seq.settings.width;
+    media.info.height = seq.settings.height;
+    media.info.frameRate = seq.settings.frameRate;
+    Clip clip;
+    clip.id = ClipId::generate();
+    clip.media = media.id;
+    clip.name = media.name;
+    clip.start = at;
+    clip.duration = duration;
+    plan.clearRange(track, at, at + duration);
+    plan.add(track, std::move(clip));
+    if (titleMedia != nullptr) {
+        *titleMedia = media.id;
+    }
+    std::vector<std::unique_ptr<Command>> steps;
+    steps.push_back(std::make_unique<AddMediaCommand>(std::move(media)));
+    steps.push_back(plan.build("Place Title"));
+    return std::make_unique<MacroCommand>("New Title", std::move(steps));
 }
 
 // --- Copy / paste --------------------------------------------------------------------------------

@@ -64,6 +64,11 @@ std::string trackProblem(const Track& track) {
     if (track.id.isNull()) {
         return "track has a null id";
     }
+    for (const auto& t : track.transitions) {
+        if (t.id.isNull() || t.type.empty() || !t.duration.isPositive()) {
+            return "track " + track.id.toString() + " has an invalid transition";
+        }
+    }
     if (!std::isfinite(track.state.volumeDb) || !(track.state.pan >= -100.0 && track.state.pan <= 100.0)) {
         return "track " + track.id.toString() + " has an invalid volume or pan";
     }
@@ -170,6 +175,19 @@ ClipRef Project::findClip(ClipId id) const noexcept {
     return {};
 }
 
+TransitionRef Project::findTransition(TransitionId id) const noexcept {
+    for (const auto& seq : m_sequences) {
+        for (const auto* list : {&seq.videoTracks, &seq.audioTracks}) {
+            for (const auto& track : *list) {
+                if (const auto* t = track.findTransition(id)) {
+                    return {&seq, &track, t};
+                }
+            }
+        }
+    }
+    return {};
+}
+
 std::vector<ClipId> Project::clipsUsingMedia(MediaId id) const {
     std::vector<ClipId> result;
     for (const auto& seq : m_sequences) {
@@ -247,6 +265,9 @@ std::vector<std::string> Project::validate() const {
                     if (findMedia(clip.media) == nullptr) {
                         problems.push_back("clip " + clip.id.toString() + " references unknown media");
                     }
+                }
+                for (const auto& transition : track.transitions) {
+                    unique(transition.id.uuid(), "transition");
                 }
             }
         }
@@ -542,6 +563,53 @@ Track ProjectMutator::removeTrack(TrackId id, std::size_t* indexOut) {
     list->erase(list->begin() + static_cast<std::ptrdiff_t>(index));
     m_project.notify({ChangeKind::TrackRemoved, id.uuid(), seq->id.uuid()});
     return removed;
+}
+
+void ProjectMutator::addTransition(TrackId track, Transition transition) {
+    if (transition.id.isNull() || transition.type.empty() || !transition.duration.isPositive()) {
+        fail("transition needs an id, a type and a positive duration");
+    }
+    if (m_project.findTransition(transition.id).transition != nullptr) {
+        fail("transition id already exists");
+    }
+    std::size_t index = 0;
+    auto [seq, list] = trackList(track, index);
+    (*list)[index].transitions.push_back(std::move(transition));
+    m_project.notify({ChangeKind::TrackChanged, track.uuid(), seq->id.uuid()});
+}
+
+Transition ProjectMutator::removeTransition(TransitionId id) {
+    const auto ref = m_project.findTransition(id);
+    if (ref.transition == nullptr) {
+        fail("transition does not exist");
+    }
+    std::size_t index = 0;
+    auto [seq, list] = trackList(ref.track->id, index);
+    auto& transitions = (*list)[index].transitions;
+    const auto it = std::find_if(transitions.begin(), transitions.end(), [&](const Transition& t) { return t.id == id; });
+    Transition removed = *it;
+    transitions.erase(it);
+    m_project.notify({ChangeKind::TrackChanged, (*list)[index].id.uuid(), seq->id.uuid()});
+    return removed;
+}
+
+void ProjectMutator::replaceTransition(Transition transition) {
+    const auto ref = m_project.findTransition(transition.id);
+    if (ref.transition == nullptr) {
+        fail("transition does not exist");
+    }
+    if (transition.type.empty() || !transition.duration.isPositive()) {
+        fail("transition needs a type and a positive duration");
+    }
+    std::size_t index = 0;
+    auto [seq, list] = trackList(ref.track->id, index);
+    for (auto& t : (*list)[index].transitions) {
+        if (t.id == transition.id) {
+            t = std::move(transition);
+            break;
+        }
+    }
+    m_project.notify({ChangeKind::TrackChanged, (*list)[index].id.uuid(), seq->id.uuid()});
 }
 
 void ProjectMutator::setTrackState(TrackId id, TrackState state) {

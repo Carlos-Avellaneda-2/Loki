@@ -81,7 +81,7 @@ int main(int argc, char* argv[]) {
             QObject::connect(window.mediaServices(), &loki::ui::MediaServices::importFinished, &window,
                              [&window, file](int, const QStringList&) {
                                  for (const auto& m : window.projectController()->project().media()) {
-                                     if (std::filesystem::equivalent(m.path, file)) {
+                                     if (std::error_code ec; !m.isGenerated() && std::filesystem::equivalent(m.path, file, ec)) {
                                          window.sourceMonitor()->loadMedia(m.id);
                                          break;
                                      }

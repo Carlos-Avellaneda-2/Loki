@@ -1,5 +1,6 @@
 #include "ui/timeline/timeline_panel.h"
 
+#include "model/transitions.h"
 #include "ui/project_controller.h"
 #include "ui/shortcut_manager.h"
 
@@ -177,6 +178,10 @@ void TimelinePanel::registerShortcuts(ShortcutManager& s) {
     add("cut", tr("Cut"), QKeySequence(Qt::CTRL | Qt::Key_X), [v] { v->cutSelection(); });
     add("paste", tr("Paste"), QKeySequence(Qt::CTRL | Qt::Key_V), [v] { v->paste(false); });
     add("pasteInsert", tr("Paste Insert"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V), [v] { v->paste(true); });
+    add("defaultVideoTransition", tr("Apply Video Transition"), QKeySequence(Qt::CTRL | Qt::Key_D),
+        [v] { v->applyTransitionAtPlayhead(std::string(model::kCrossDissolve)); });
+    add("defaultAudioTransition", tr("Apply Audio Transition"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D),
+        [v] { v->applyTransitionAtPlayhead(std::string(model::kCrossfade)); });
     add("link", tr("Link / Unlink"), QKeySequence(Qt::CTRL | Qt::Key_L), [v] { v->toggleLinkSelection(); });
     add("zoomIn", tr("Zoom In"), QKeySequence(Qt::Key_Equal), [v] { v->setPixelsPerSecond(v->metrics().pixelsPerSecond * 1.5); });
     add("zoomOut", tr("Zoom Out"), QKeySequence(Qt::Key_Minus), [v] { v->setPixelsPerSecond(v->metrics().pixelsPerSecond / 1.5); });

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,16 +32,22 @@ struct MediaInfo {
     friend bool operator==(const MediaInfo&, const MediaInfo&) = default;
 };
 
+// Generated media (D20): no file; the renderer synthesizes the picture.
+inline constexpr std::string_view kTitleGenerator = "loki.title";
+
 struct MediaItem {
     MediaId id;
     std::string name;
-    std::filesystem::path path; // absolute path of the original file
+    std::filesystem::path path; // absolute path of the original file (empty for generated media)
+    std::string generator;      // non-empty: generated media (kTitleGenerator)
     std::optional<std::filesystem::path> proxyPath;
     BinId bin; // null = project root
     MediaInfo info;
     // Source Monitor In/Out marks (source time). Used by insert/overwrite.
     std::optional<Rational> markIn;
     std::optional<Rational> markOut;
+
+    [[nodiscard]] bool isGenerated() const noexcept { return !generator.empty(); }
 
     friend bool operator==(const MediaItem&, const MediaItem&) = default;
 };
@@ -58,6 +65,13 @@ struct Effect {
     std::string type; // e.g. "loki.motion", "loki.opacity"
     bool enabled = true;
     std::vector<Parameter> parameters;
+    // Non-animatable text parameters (title text, font, LUT file) (D20).
+    std::map<std::string, std::string> strings;
+
+    [[nodiscard]] std::string string(const std::string& key, const std::string& fallback = {}) const {
+        const auto it = strings.find(key);
+        return it != strings.end() ? it->second : fallback;
+    }
 
     [[nodiscard]] const Parameter* findParameter(std::string_view key) const noexcept {
         for (const auto& p : parameters) {
@@ -104,6 +118,23 @@ struct Clip {
 
 enum class TrackKind { Video, Audio };
 
+// Where a two-sided transition sits relative to the cut (D19).
+enum class TransitionAlignment { Center, StartAtCut, EndAtCut };
+
+// A transition on a track (D19). Two-sided: between `from` (left) and `to` (right) clips that touch
+// at a cut. One-sided: only `from` (at its end) or only `to` (at its start). A transition whose
+// clips no longer exist or no longer touch is ignored by the renderer (edits remove it).
+struct Transition {
+    TransitionId id;
+    std::string type; // "loki.crossDissolve", "loki.dipToBlack", "loki.wipe", "loki.crossfade"
+    ClipId from;
+    ClipId to;
+    Rational duration; // > 0
+    TransitionAlignment alignment = TransitionAlignment::Center;
+
+    friend bool operator==(const Transition&, const Transition&) = default;
+};
+
 struct TrackState {
     std::string name;
     bool locked = false;
@@ -122,6 +153,24 @@ struct Track {
     TrackKind kind = TrackKind::Video;
     TrackState state;
     std::vector<Clip> clips; // sorted by start, never overlapping
+    std::vector<Transition> transitions;
+
+    [[nodiscard]] const Clip* findClip(ClipId clipId) const noexcept {
+        for (const auto& c : clips) {
+            if (c.id == clipId) {
+                return &c;
+            }
+        }
+        return nullptr;
+    }
+    [[nodiscard]] const Transition* findTransition(TransitionId transitionId) const noexcept {
+        for (const auto& t : transitions) {
+            if (t.id == transitionId) {
+                return &t;
+            }
+        }
+        return nullptr;
+    }
 
     [[nodiscard]] Rational end() const { return clips.empty() ? Rational() : clips.back().end(); }
 
