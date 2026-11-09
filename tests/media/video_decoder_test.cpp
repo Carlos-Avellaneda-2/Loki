@@ -124,6 +124,19 @@ TEST(VideoDecoderTest, SeekThenSequential) {
     }
 }
 
+TEST(VideoDecoderTest, ForwardJumpsAcrossKeyframesStayExact) {
+    // h264 asset: GOP 15. Short forward jumps decode on; longer ones with a keyframe in between seek
+    // to that keyframe (scrubbing). Either way the right frame must come back.
+    const auto& a = MediaAssets::get();
+    VideoDecoder d(a.h264, {.allowHardware = false});
+    const auto rate = a.h264Spec.frameRate;
+    for (const bool scrub : {false, true}) {
+        for (const int index : {2, 3, 5, 40, 41, 44, 59, 16, 31}) {
+            expectFrame(d.frameAt(framesToTime(index, rate), scrub), index, rate);
+        }
+    }
+}
+
 TEST(VideoDecoderTest, FramesUpToReturnsWholeRunForReversePlayback) {
     const auto& a = MediaAssets::get();
     VideoDecoder d(a.h264, {.allowHardware = false});

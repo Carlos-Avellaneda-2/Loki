@@ -14,6 +14,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
 
@@ -78,6 +79,8 @@ private:
     QSet<QString> m_pendingWaveforms;
     int m_importsRunning = 0;
     QSet<QString> m_pendingProxies;
+    // Set on destruction: long running jobs (proxies) stop instead of delaying shutdown.
+    std::shared_ptr<std::atomic<bool>> m_shuttingDown = std::make_shared<std::atomic<bool>>(false);
     std::unique_ptr<util::TaskPool> m_pool; // declared last: destroyed (joined) first
 };
 

@@ -104,7 +104,8 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
         dockWidget(ui::PanelId::SourceMonitor)->raise();
     });
     m_timeline->setTransport(m_programMonitor->transport());
-    m_stallDetector = new ui::StallDetector(this); // logs UI blocks > 50 ms (performance criterion)
+    // Logs UI blocks > 50 ms (performance criterion); a 20 ms tick keeps idle wake-ups low.
+    m_stallDetector = new ui::StallDetector(this, 20);
     m_autoSaver = new ui::AutoSaver(*m_controller, QDir(m_services->cacheDirectory()).filePath(QStringLiteral("autosave")),
                                     ui::AutoSaver::loadSettings(), this);
     // Proxy/original toggle shared by both monitors (D24); an app preference, not project data.
@@ -233,18 +234,25 @@ void MainWindow::checkForRecovery() {
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
         const auto recovery = newest;
-        connect(m_controller, &ui::ProjectController::openFinished, this,
-                [recovery](bool ok, const QString&) {
-                    if (ok) {
-                        ui::AutoSaver::discard(recovery);
-                    }
-                },
-                Qt::SingleShotConnection);
-        m_controller->openRecovered(newest.file, newest.originalPath);
-        orphans.erase(orphans.begin());
+        auto connection = std::make_shared<QMetaObject::Connection>();
+        *connection = connect(m_controller, &ui::ProjectController::openFinished, this,
+                              [recovery, connection](bool ok, const QString&) {
+                                  QObject::disconnect(*connection);
+                                  // Opened: the live session protects it now. Failed: keep a copy.
+                                  ok ? ui::AutoSaver::discard(recovery) : (void)ui::AutoSaver::keepAsAutosave(recovery);
+                              });
+        if (m_controller->openRecovered(newest.file, newest.originalPath)) {
+            orphans.erase(orphans.begin());
+        } else {
+            disconnect(*connection);
+        }
     }
+    // Not recovered now (declined, or older sessions): never lose them, keep them as autosave copies.
     for (const auto& other : orphans) {
-        ui::AutoSaver::discard(other); // older crashed sessions: their copies remain in the autosave folder
+        const auto kept = ui::AutoSaver::keepAsAutosave(other);
+        if (!kept.isEmpty()) {
+            statusBar()->showMessage(tr("Unsaved changes were kept in %1").arg(QDir::toNativeSeparators(kept)), 10000);
+        }
     }
 }
 

@@ -40,7 +40,7 @@ FileVideoSource::FileVideoSource(const std::filesystem::path& path, bool allowHa
 FileVideoSource::~FileVideoSource() = default;
 
 std::optional<TimedFrame> FileVideoSource::frameAt(const Rational& t) {
-    return timed(m_decoder->frameAt(t));
+    return timed(m_decoder->frameAt(t, true)); // seeks/scrubs (playback uses nextFrame)
 }
 
 void FileVideoSource::seek(const Rational& t) {
@@ -212,15 +212,19 @@ void SequenceVideoSource::prefetch(const Rational& t) {
             want(&*clip);
         }
     }
-    if (work.size() < 2 || work.size() > kMaxOpenVideoDecoders) {
-        return; // nothing to overlap (or the decoder LRU could evict one we hold)
+    if (work.size() == 1) {
+        (void)work.front().first->frameAt(work.front().second, true); // single layer: scrub jump only
+        return;
+    }
+    if (work.empty() || work.size() > kMaxOpenVideoDecoders) {
+        return; // nothing to do (or the decoder LRU could evict one we hold)
     }
     // Each decoder belongs to one clip, so they can run concurrently; the first stays on this thread.
     std::vector<std::future<void>> others;
     for (std::size_t i = 1; i < work.size(); ++i) {
-        others.push_back(std::async(std::launch::async, [job = work[i]] { (void)job.first->frameAt(job.second); }));
+        others.push_back(std::async(std::launch::async, [job = work[i]] { (void)job.first->frameAt(job.second, true); }));
     }
-    (void)work.front().first->frameAt(work.front().second);
+    (void)work.front().first->frameAt(work.front().second, true);
     for (auto& f : others) {
         f.get();
     }

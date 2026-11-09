@@ -59,8 +59,11 @@ public:
 
     // Recovery files left by sessions that did not exit normally (their lock is free or stale).
     [[nodiscard]] static std::vector<Recovery> findOrphans(const QString& folder);
-    // Deletes an orphan after it was recovered or dismissed.
+    // Deletes an orphan after it was recovered.
     static void discard(const Recovery& recovery);
+    // Moves an orphan that was not recovered to "<project>-recovered-yyyyMMdd-HHmmss.loki" in the
+    // same folder (never pruned) and removes its session files. Returns the new path (empty on error).
+    static QString keepAsAutosave(const Recovery& recovery);
 
     // Settings stored in QSettings ("autosave/...").
     [[nodiscard]] static Settings loadSettings();

@@ -179,6 +179,39 @@ TEST_F(RobustnessTest, OrphanedSessionIsFoundAndRecoveredAsModified) {
     EXPECT_TRUE(ui::AutoSaver::findOrphans(folder).empty());
 }
 
+TEST_F(RobustnessTest, UnrecoveredSessionsAreKeptAndAFailedRecoveryDoesNotLeak) {
+    loki::test::TempDir dir;
+    const auto folder = QString::fromStdWString((dir.path() / "autosave").wstring());
+    QDir().mkpath(folder);
+    {
+        QFile f(folder + QStringLiteral("/session-old.loki"));
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(QByteArray::fromStdString(model::serializeProject(model::makeDefaultProject())));
+    }
+    const auto orphans = ui::AutoSaver::findOrphans(folder);
+    ASSERT_EQ(orphans.size(), 1u);
+    const auto kept = ui::AutoSaver::keepAsAutosave(orphans[0]);
+    ASSERT_FALSE(kept.isEmpty());
+    EXPECT_TRUE(QFile::exists(kept));
+    EXPECT_TRUE(kept.contains(QStringLiteral("Untitled-recovered-")));
+    EXPECT_TRUE(ui::AutoSaver::findOrphans(folder).empty()); // not offered again
+    // A recovery that fails to load must not make the next normal open a "recovery". (A bare
+    // controller: the main window would show a modal "could not open" box.)
+    ui::ProjectController bare;
+    ASSERT_TRUE(bare.openRecovered(folder + QStringLiteral("/missing.loki"), QStringLiteral("C:/x/original.loki")));
+    bare.waitForPendingIo();
+    const auto normal = QString::fromStdWString((dir.path() / "normal.loki").wstring());
+    {
+        QFile f(normal);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(QByteArray::fromStdString(model::serializeProject(model::makeDefaultProject())));
+    }
+    ASSERT_TRUE(bare.openProject(normal));
+    bare.waitForPendingIo();
+    EXPECT_EQ(QDir::cleanPath(bare.filePath()), QDir::cleanPath(normal));
+    EXPECT_FALSE(bare.isModified());
+}
+
 // --- Workspaces (D26) ---------------------------------------------------------------------------
 
 TEST_F(RobustnessTest, WorkspacesRearrangeAndUserLayoutsPersist) {

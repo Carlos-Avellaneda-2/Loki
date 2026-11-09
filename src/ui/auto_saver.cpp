@@ -207,6 +207,22 @@ void AutoSaver::discard(const Recovery& recovery) {
     QFile::remove(recovery.file.left(recovery.file.size() - 5) + QStringLiteral(".lock"));
 }
 
+QString AutoSaver::keepAsAutosave(const Recovery& recovery) {
+    const QFileInfo info(recovery.file);
+    const QString name = recovery.originalPath.isEmpty() ? QStringLiteral("Untitled")
+                                                         : QFileInfo(recovery.originalPath).completeBaseName();
+    const QString stamp = (recovery.saved.isValid() ? recovery.saved : info.lastModified()).toString(QStringLiteral("yyyyMMdd-HHmmss"));
+    const QString target = info.dir().filePath(QStringLiteral("%1-recovered-%2.loki").arg(name, stamp));
+    QFile::remove(target);
+    const bool moved = QFile::rename(recovery.file, target);
+    if (!moved) {
+        spdlog::warn("Could not keep recovery file {}", recovery.file.toStdString());
+        return {};
+    }
+    discard(recovery); // the remaining .json / .lock
+    return target;
+}
+
 AutoSaver::Settings AutoSaver::loadSettings() {
     QSettings s;
     Settings out;

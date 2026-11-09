@@ -128,7 +128,6 @@ void LevelMeter::paintEvent(QPaintEvent*) {
         p.setPen(QColor(0x9a, 0x9a, 0x9a));
         for (const double db : {0.0, -6.0, -12.0, -18.0, -24.0, -36.0, -48.0, -60.0}) {
             const int y = yOf(db);
-            p.drawLine(bars.right() + 2, y, bars.right() + 4, y);
             p.drawText(QRect(bars.right() + 8, y - 7, scaleW - 8, 14), Qt::AlignVCenter | Qt::AlignLeft,
                        QString::number(static_cast<int>(db)));
         }

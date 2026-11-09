@@ -16,6 +16,7 @@
 #include <QOffscreenSurface>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSurfaceFormat>
 #include <QTimer>
@@ -75,7 +76,12 @@ ExportDialog::ExportDialog(ui::ProjectController& controller, model::SequenceId 
     const auto lastPreset = settings.value(QStringLiteral("export/preset"), QStringLiteral("h264-match")).toString();
     m_preset->setCurrentIndex(std::max(0, m_preset->findData(lastPreset)));
     const QString folder = settings.value(QStringLiteral("export/folder"), QDir::homePath()).toString();
-    const QString base = seq != nullptr ? qs(seq->name) : QStringLiteral("export");
+    // The sequence name may contain characters Windows does not allow in file names.
+    QString base = seq != nullptr ? qs(seq->name).trimmed() : QString();
+    base.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
+    if (base.isEmpty()) {
+        base = QStringLiteral("export");
+    }
     m_file->setText(QDir(folder).filePath(base + qs(exporter::exportPresets()[static_cast<std::size_t>(m_preset->currentIndex())].extension)));
 
     connect(m_preset, &QComboBox::currentIndexChanged, this, [this](int index) {

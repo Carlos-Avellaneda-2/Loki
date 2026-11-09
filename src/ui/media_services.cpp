@@ -91,6 +91,7 @@ MediaServices::MediaServices(ProjectController& controller, const QString& cache
       m_pool(std::make_unique<util::TaskPool>(util::TaskPool::defaultDecodeThreads(), "media")) {}
 
 MediaServices::~MediaServices() {
+    m_shuttingDown->store(true); // running proxy jobs stop at their next progress step
     m_pool.reset(); // cancel pending work and join before the caches go away
 }
 
@@ -167,11 +168,12 @@ void MediaServices::createProxies(const std::vector<model::MediaId>& ids) {
         const model::MediaItem item = *found;
         const auto output = exporter::proxyPathFor(m_cache->root(), id);
         m_pool->submit(
-            [this, key, item, output](const util::CancelToken& cancel) {
+            [this, key, item, output, shuttingDown = m_shuttingDown](const util::CancelToken& cancel) {
                 std::atomic<bool> stop{false};
                 const auto result = exporter::makeProxy(item, output, &stop, [&](double p) {
-                    if (cancel.cancelled()) {
+                    if (cancel.cancelled() || shuttingDown->load()) {
                         stop = true;
+                        return;
                     }
                     QMetaObject::invokeMethod(this, [this, key, p] { emit proxyProgress(key, p); }, Qt::QueuedConnection);
                 });

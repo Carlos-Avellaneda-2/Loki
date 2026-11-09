@@ -53,7 +53,10 @@ public:
     // Frame displayed at source time `t` (the last frame with pts <= t). Decodes forward from the
     // current position when `t` is close ahead, otherwise seeks to the previous keyframe first.
     // Returns nullptr past the end of the stream.
-    VideoFramePtr frameAt(const Rational& t);
+    // `scrub`: a user jump (seek/scrub). Then, if a keyframe lies between the current position and a
+    // target up to 2 s ahead, the decoder jumps to that keyframe instead of decoding every frame in
+    // between. Playback leaves it off: a late player must not add seeks (decoder flushes).
+    VideoFramePtr frameAt(const Rational& t, bool scrub = false);
 
     // Next frame in decode order from the current position; nullptr at end of stream.
     VideoFramePtr nextFrame();
@@ -73,6 +76,8 @@ private:
     bool receiveFrame(AVFrame* out);
     VideoFramePtr convert(AVFrame* frame);
     void seekToKeyframeBefore(const Rational& t);
+    // Whether the index has a keyframe after `from` (by more than a frame) and at or before `to`.
+    [[nodiscard]] bool keyframeBetween(const Rational& from, const Rational& to) const;
 
     std::filesystem::path m_path;
     VideoDecoderOptions m_options;

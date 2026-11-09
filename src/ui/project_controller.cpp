@@ -151,12 +151,13 @@ void ProjectController::onSaveDone() {
 
 void ProjectController::onLoadDone() {
     LoadResult result = m_loadWatcher.result();
+    // Taken before any early return: a failed recovery must not turn the next open into one.
+    const auto recovered = std::exchange(m_recoveredPath, std::nullopt);
     if (!result.project) {
         spdlog::error("Opening {} failed: {}", m_pendingLoadPath.toStdString(), result.error.toStdString());
         emit openFinished(false, result.error);
         return;
     }
-    const auto recovered = std::exchange(m_recoveredPath, std::nullopt);
     replaceProject(std::move(*result.project), recovered ? *recovered : m_pendingLoadPath);
     if (recovered) {
         m_forceModified = true;

@@ -361,6 +361,23 @@ VideoFramePtr VideoDecoder::convert(AVFrame* decoded) {
     return frame;
 }
 
+bool VideoDecoder::keyframeBetween(const Rational& from, const Rational& to) const {
+    // Normal playback asks for the next frame (or a few ahead after a drop): always decode on.
+    const Rational step = m_info.frameDuration.isPositive() ? m_info.frameDuration : Rational(1, 24);
+    if (to - from <= step * Rational(3)) {
+        return false;
+    }
+    const AVStream* stream = m_format->streams[m_streamIndex];
+    const std::int64_t ts = timeToTimestamp(max(Rational(), to) + m_info.startTime, m_timeBase);
+    const AVIndexEntry* entry = avformat_index_get_entry_from_timestamp(const_cast<AVStream*>(stream), ts,
+                                                                          AVSEEK_FLAG_BACKWARD);
+    if (entry == nullptr || (entry->flags & AVINDEX_KEYFRAME) == 0) {
+        return false; // no index (some containers): keep decoding forward
+    }
+    const Rational keyframe = timestampToTime(entry->timestamp, m_timeBase) - m_info.startTime;
+    return keyframe > from;
+}
+
 void VideoDecoder::seekToKeyframeBefore(const Rational& t) {
     const Rational target = max(Rational(), t) + m_info.startTime;
     const std::int64_t ts = timeToTimestamp(target, m_timeBase);
@@ -397,7 +414,7 @@ VideoFramePtr VideoDecoder::nextFrame() {
     return f;
 }
 
-VideoFramePtr VideoDecoder::frameAt(const Rational& requested) {
+VideoFramePtr VideoDecoder::frameAt(const Rational& requested, bool scrub) {
     if (m_still) {
         // A still image shows its only frame at every time.
         if (!m_last) {
@@ -411,7 +428,10 @@ VideoFramePtr VideoDecoder::frameAt(const Rational& requested) {
         return m_last;
     }
     const Rational from = m_last ? m_last->pts : (!m_queue.empty() ? m_queue.front()->pts : Rational(-1));
-    const bool canContinue = !from.isNegative() && from <= t && t - from < kForwardDecodeWindow;
+    // Decode forward from the current position when the target is close, unless a keyframe lies
+    // between: then seeking to that keyframe decodes fewer frames (random scrubbing).
+    const bool canContinue = !from.isNegative() && from <= t && t - from < kForwardDecodeWindow &&
+                             !(scrub && keyframeBetween(from, t));
     if (!canContinue) {
         seekToKeyframeBefore(t);
     }

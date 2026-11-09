@@ -192,6 +192,8 @@ ScrubResult measureScrub(std::shared_ptr<playback::SequenceSnapshot> seq, int se
             std::this_thread::sleep_for(1ms);
         }
         const double ms = msSince(t0);
+        std::cout << "  seek " << (random ? "random" : "step") << (seq->useProxies ? " proxy" : " orig") << " frame "
+                  << position << ": " << ms << " ms\n";
         total += ms;
         r.maxMs = std::max(r.maxMs, ms);
         ++r.samples;
