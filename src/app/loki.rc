@@ -1,0 +1,2 @@
+// Windows resources: the executable's icon (Explorer, taskbar, shortcuts, .loki files).
+IDI_ICON1 ICON "resources/icons/loki.ico"

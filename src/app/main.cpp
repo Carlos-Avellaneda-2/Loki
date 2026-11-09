@@ -8,6 +8,7 @@
 #include "util/logging.h"
 
 #include <QApplication>
+#include <QIcon>
 #include <QTimer>
 #include <QDir>
 #include <QSettings>
@@ -33,6 +34,8 @@ int main(int argc, char* argv[]) {
     QSurfaceFormat::setDefaultFormat(format);
 
     QApplication app(argc, argv);
+    // Window/taskbar icon (the .exe icon itself comes from loki.rc).
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/loki/icons/loki_256.png")));
 
     const auto dataDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
     loki::util::LogConfig logConfig;

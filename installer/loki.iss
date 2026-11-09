@@ -30,6 +30,7 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ChangesAssociations=yes
 WizardStyle=modern
+SetupIconFile=..\src\app\resources\icons\loki.ico
 LicenseFile={#StageDir}\licenses\NOTICE.txt
 
 [Languages]

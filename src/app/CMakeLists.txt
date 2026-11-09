@@ -18,7 +18,10 @@ add_library(loki::app ALIAS loki_app)
 qt_add_resources(loki_app "loki_theme"
     PREFIX "/loki"
     BASE "resources"
-    FILES resources/theme/dark.qss
+    FILES
+        resources/theme/dark.qss
+        resources/icons/loki.png
+        resources/icons/loki_256.png
 )
 
 target_include_directories(loki_app PUBLIC "${PROJECT_SOURCE_DIR}/src")
@@ -33,6 +36,6 @@ target_link_libraries(loki_app
 target_compile_definitions(loki_app PUBLIC LOKI_VERSION="${PROJECT_VERSION}")
 loki_set_warnings(loki_app)
 
-qt_add_executable(loki WIN32 main.cpp)
+qt_add_executable(loki WIN32 main.cpp loki.rc)
 target_link_libraries(loki PRIVATE loki::app)
 loki_set_warnings(loki)
