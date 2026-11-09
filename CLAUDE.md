@@ -103,7 +103,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],
   UUID, ruta abs+rel); sin solapes en pista.
 
-- D24–D27 (Fase 11): proxies H.264 720p GOP 15 solo video en caché, toggle de app (no del proyecto), export
+- D24–D27 (Fase 11): proxies H.264 720p GOP 5 (aprobado; antes 15) solo video en caché, toggle de app (no del proyecto), export
   siempre con originales; recuperación por sesión con lock + copias cada 5 min ×10; workspaces en QSettings;
   instalador Inno Setup por usuario.
 - D19–D23 (Fases 9/10): transiciones en la pista (corte o borde, alineación, freeze sin handles); formato v2 con

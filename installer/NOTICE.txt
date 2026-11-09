@@ -7,7 +7,7 @@ Bibliotecas LGPL, enlazadas dinámicamente (cada una es una DLL aparte que se pu
 
 - Qt 6.8.3 (Qt GUI, Widgets, OpenGL, Concurrent): LGPL-3.0.
   Código fuente: https://download.qt.io/archive/qt/6.8/6.8.3/single/
-  Texto de la licencia: https://www.gnu.org/licenses/lgpl-3.0.txt (y https://www.gnu.org/licenses/gpl-3.0.txt)
+  Licencia completa: LGPL-3.0.txt (que se apoya en GPL-3.0.txt), en esta carpeta.
 - FFmpeg 8 (avcodec, avformat, avutil, swscale, swresample): LGPL-2.1 o posterior, compilado sin
   componentes GPL ni "nonfree". Licencia completa: ffmpeg.txt.
 - Qt Advanced Docking System 5.1.1: LGPL-2.1. Licencia completa: qtadvanceddocking.txt.

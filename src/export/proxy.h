@@ -10,11 +10,12 @@
 
 namespace loki::exporter {
 
-// Proxies (D24): H.264, at most 1280x720 (aspect kept, even size), keyframe every 15 frames, video
+// Proxies (D24): H.264, at most 1280x720 (aspect kept, even size), keyframe every 5 frames (fast
+// random seeks; approved change from 15), video
 // only (sound always comes from the original). Preview-only: export reads the originals.
 inline constexpr int kProxyMaxWidth = 1280;
 inline constexpr int kProxyMaxHeight = 720;
-inline constexpr int kProxyGop = 15;
+inline constexpr int kProxyGop = 5;
 
 [[nodiscard]] std::pair<int, int> proxySize(int width, int height);
 [[nodiscard]] std::filesystem::path proxyPathFor(const std::filesystem::path& cacheRoot, model::MediaId id);

@@ -40,6 +40,7 @@ Copy-Item (Join-Path $redist.FullName 'x64\Microsoft.VC143.CRT\*.dll') $stage
 # Licenses: our notice, every vcpkg package's copyright, Qt ADS.
 $licenses = Join-Path $stage 'licenses'
 Copy-Item (Join-Path $root 'installer\NOTICE.txt') $licenses
+Copy-Item (Join-Path $root 'installer\licenses\*.txt') $licenses # LGPL-3.0 / GPL-3.0 (Qt)
 Copy-Item (Join-Path $root 'docs\LICENSING.md') $licenses
 $share = Join-Path $root 'build\windows-msvc-release\vcpkg_installed\x64-windows\share'
 Get-ChildItem $share -Directory | ForEach-Object {

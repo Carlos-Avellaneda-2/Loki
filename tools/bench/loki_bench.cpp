@@ -234,7 +234,7 @@ int main(int argc, char* argv[]) {
         std::filesystem::rename(partial, file); // an interrupted run never leaves a broken file
     }
     auto media = mediaItem(file);
-    const auto proxyFile = dir / "bench_1080p30_proxy.mp4";
+    const auto proxyFile = dir / "bench_1080p30_proxy_gop5.mp4";
     if (!std::filesystem::exists(proxyFile)) {
         std::cout << "Creating the 720p proxy..." << std::endl;
         (void)exporter::makeProxy(media, proxyFile);
@@ -325,8 +325,8 @@ int main(int argc, char* argv[]) {
     const std::tuple<const char*, const char*, const ScrubResult*> scrubs[] = {
         {"Originales (GOP 30)", "aleatorios", &scrubRandom},
         {"Originales (GOP 30)", "cortos (arrastre)", &scrubSteps},
-        {"Proxies 720p (GOP 15)", "aleatorios", &scrubProxyRandom},
-        {"Proxies 720p (GOP 15)", "cortos (arrastre)", &scrubProxySteps},
+        {"Proxies 720p (GOP 5)", "aleatorios", &scrubProxyRandom},
+        {"Proxies 720p (GOP 5)", "cortos (arrastre)", &scrubProxySteps},
     };
     for (const auto& [kind, steps, sc] : scrubs) {
         std::snprintf(buf, sizeof buf, "| %s | %s | %.0f ms | %.0f ms | %s |\n", kind, steps, sc->avgMs, sc->maxMs,

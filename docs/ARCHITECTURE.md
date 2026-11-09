@@ -431,7 +431,7 @@ Implementado en la Fase 11 (D24–D27).
     ruta original y marcado como modificado.
   - Copias periódicas `<proyecto>-yyyyMMdd-HHmmss.loki` (5 min, 10 versiones), configurables en Preferencias.
 - Proxies (D24):
-  - `exporter::makeProxy` genera H.264 de 720p como máximo, con GOP 15 y solo video, en `<caché>/proxies`. La ruta
+  - `exporter::makeProxy` genera H.264 de 720p como máximo, con GOP 5 (saltos aleatorios rápidos; antes 15) y solo video, en `<caché>/proxies`. La ruta
     se guarda en `MediaItem::proxyPath` con un comando.
   - Se crean desde el menú contextual del panel Project, en el pool de tareas.
   - `playback::videoPathFor` decide si se lee el proxy o el original:
