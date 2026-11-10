@@ -424,6 +424,27 @@ sequenceDiagram
   compositor (≤ 10 por segundo) solo cuando el panel está visible; el análisis corre con QtConcurrent y descarta
   imágenes intermedias.
 
+## 7j. Color y efectos (Fase 14)
+
+- Modelo (`model/mask.h`): `Mask` (bezier cerrado en píxeles del medio, claves de trayecto en tiempo del origen,
+  feather/opacity/expansion), `CurvePoint` + `evaluateCurve` (spline monótona). `Effect` guarda `masks`,
+  `curves` y `samples`. `EffectDef` dice si admite máscaras, curvas o análisis.
+- Render (`render/grading`, `render/effects`): `Lumetri` (ruedas, curvas como tabla de 256, HSL secundario,
+  viñeta), `KeyParams`, `BlurParams` (kernel con desplazamientos enteros), `LayerMasks` (una máscara por etapa:
+  opacidad, color, Lumetri, LUT, desenfoque), `WipeShape` para iris, `dimTarget` para Dip to White y
+  `Layer::pre` (corrección del estabilizador antes de Motion). Todo con la misma fórmula en el shader y en
+  `cpu_compositor`, con tests GPU vs CPU.
+- `GlCompositor`: prepasada por capa cuando hay key o desenfoque (marco → RGBA con key → blur horizontal →
+  vertical, `texelFetch` con los mismos taps que la CPU); máscaras como texturas R8, curvas como textura 256×1.
+- `playback::EffectResolver` traduce los efectos del clip a la capa, con cachés (tablas de curvas, máscaras
+  rasterizadas por forma, planes de estabilización).
+- `analysis` (`loki_analysis`): `estimateMotion` (block matching + ajuste de similitud robusto), `trackRegion`
+  (SAD con traslación y escala), y los trabajos `analyzeStabilizer` / `trackMask`, que decodifican a 480 px en un
+  hilo de trabajo. Effect Controls los lanza con QtConcurrent y aplica el resultado como un comando en el hilo de
+  UI.
+- `ui::MaskOverlay` dibuja y edita la máscara elegida sobre el monitor de programa (`VideoView::setOverlay`), y
+  crea máscaras con la pluma.
+
 ## 8. Export
 
 Implementado en la Fase 10 (D22, D23), en el módulo `export` (namespace `loki::exporter`).

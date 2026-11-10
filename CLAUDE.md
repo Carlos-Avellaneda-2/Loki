@@ -51,6 +51,10 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
   (`grading`, `cpu_compositor`) y tener test GPU vs CPU en `loki_gl_tests`.
 - Rendimiento: nada fijo para la máquina del usuario; los límites salen de `playback::PerformanceProfile`
   (`main.cpp` lo aplica al arrancar; Preferences > Performance). Standard = valores de la máquina del usuario.
+- Análisis (estabilizador, tracking): en `loki_analysis`, siempre en un hilo de trabajo; el resultado se aplica
+  como comando en el hilo de UI.
+- Compilar siempre tras `dev-env.ps1` (pone la consola en UTF-8): con otra página de códigos el MSVC en español
+  rompe las dependencias de headers de Ninja y quedan objetos viejos.
 - Atajos: nunca `QShortcut`/`keyPressEvent` sueltos; registrar con `ShortcutManager::create/bind` (id estable
   `<panel>.<acción>`, contexto de panel o "Application", tecla por defecto Premiere). Sin conflictos por contexto
   (hay test que lo verifica). Los tests Qt usan settings aislados (org "LokiTests").
@@ -103,6 +107,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 9. Transiciones, color, títulos — formato v2 (transiciones en pista, medios generados, parámetros texto), disolución/fundido a negro/barrido + crossfade audio, Color/LUT .cube en shader, títulos QtGui, compositor CPU de referencia, panel Efectos, 331 tests
 - [x] 10. Exportación — módulo export (ExportJob, MediaWriter FFmpeg, renderer GPU offscreen + respaldo CPU), encoders LGPL con autodetección (QSV en la máquina del usuario), presets H.264/HEVC/ProRes/WAV, diálogo con progreso/cancelar
 - [x] 11. Robustez y rendimiento — proxies 720p (D24), autoguardado + recuperación con QLockFile (D25), workspaces Edición/Color/Audio + de usuario (D26), StallDetector, decodificación paralela en saltos, loki_bench + docs/PERFORMANCE.md, instalador Inno Setup (D27), presets 1080p30/1080p60/4K30, 344 tests
+- [x] 14. Color y efectos — formato v4: Lumetri Color (ruedas, curvas, HSL, viñeta, D33), máscaras por efecto con pluma/elipse/rectángulo y seguimiento (D34), Ultra Key (D35), Warp Stabilizer con análisis en segundo plano (D36), Gaussian Blur/Sharpen y 7 transiciones (D37), módulo `loki_analysis`
 - [x] 13. Herramientas de edición — formato v3: velocidad/reversa/frame hold (D28, Speed/Duration Ctrl+R, Rate Stretch R, audio varispeed), marcadores de secuencia y de clip + panel Markers (D29), secuencias anidadas con composición transparente GPU/CPU (D30), capas de ajuste (D31), Lumetri Scopes (D32)
 - [x] 12. Escalado a equipos potentes — perfil de rendimiento Auto/Standard/High por hilos+RAM (`playback/performance`: caché, look-ahead, decodificadores, decodificación paralela en reproducción), varias secuencias (New Sequence con presets 4K/1440p/vertical/120 fps, Sequence Settings, selector en el timeline), Add Tracks (hasta 99+99), presets 4K60/1440p60/HEVC 4K, `scripts\install-local.ps1`
 
@@ -114,8 +119,10 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
   `loki.nest` + `sequence`, sin ciclos, composición anidada transparente (`Layer::nested`, alfa recto); capa de
   ajuste = medio `loki.adjustment` (`Layer::adjustment`, sin Motion); scopes en CPU de un readback reducido del
   monitor de programa, solo con el panel visible.
-- D33–D37 (aprobadas para Fase 14): Lumetri (curvas, ruedas, HSL, viñeta), máscaras por efecto con tracking,
-  Ultra Key, estabilizador con análisis en segundo plano, transiciones nuevas + desenfoque gaussiano y nitidez.
+- D33–D37 (Fase 14): Lumetri = ruedas + curvas (tabla 256) + HSL + viñeta; máscaras = bezier en píxeles del
+  medio por efecto (opacidad, color, Lumetri, LUT, blur/sharpen), rasterizadas en CPU (≤512 px) con distancia
+  firmada y muestreadas bilineal; tracking y estabilizador analizan a 480 px en segundo plano y guardan claves /
+  `samples` en el proyecto; blur = prepasada separable con taps enteros (GPU = CPU).
 - D24–D27 (Fase 11): proxies H.264 720p GOP 5 (aprobado; antes 15) solo video en caché, toggle de app (no del proyecto), export
   siempre con originales; recuperación por sesión con lock + copias cada 5 min ×10; workspaces en QSettings;
   instalador Inno Setup por usuario.

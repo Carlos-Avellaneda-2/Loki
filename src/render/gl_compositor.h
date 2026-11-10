@@ -55,7 +55,22 @@ private:
         int current = 0; // index of the target holding the accumulated image
     };
 
+    // Prepass targets (keyed source, blur pass, blurred source) at the decoded frame's size.
+    struct PrepTarget {
+        unsigned int fbo = 0;
+        unsigned int texture = 0;
+        int width = 0;
+        int height = 0;
+    };
+
     Level& ensureLevel(std::size_t depth, int width, int height);
+    void ensurePrepTarget(PrepTarget& target, int width, int height);
+    // Key and blur/sharpen of a frame layer (uploaded in `slot`) into m_prep (D35, D37).
+    void preparePass(const Layer& layer, std::size_t slot);
+    static void setKeyUniforms(QOpenGLShaderProgram& program, const KeyParams& key);
+    // Lumetri, key, masks, blur mix uniforms and textures of the layer pass.
+    void setPhase14Uniforms(const Layer& layer, bool prepared);
+    unsigned int maskTexture(std::size_t index, const MaskImage& mask);
     // Composites `frame` into level `depth`; returns false past the nesting limit.
     bool renderLevel(const CompositeFrame& frame, int width, int height, std::size_t depth);
     void uploadLayer(std::size_t slot, const media::VideoFrame& frame);
@@ -70,6 +85,11 @@ private:
 
     QOpenGLShaderProgram m_layerProgram;
     QOpenGLShaderProgram m_presentProgram;
+    QOpenGLShaderProgram m_prepareProgram;
+    QOpenGLShaderProgram m_blurProgram;
+    std::array<PrepTarget, 3> m_prep{};
+    std::array<unsigned int, 5> m_maskTextures{};
+    unsigned int m_curvesTexture = 0;
     QOpenGLVertexArrayObject m_vao;
     QOpenGLBuffer m_vbo{QOpenGLBuffer::VertexBuffer};
     std::vector<Level> m_levels;

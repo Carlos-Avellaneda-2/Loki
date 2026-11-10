@@ -9,6 +9,13 @@ const std::vector<TransitionDef>& transitionRegistry() {
         {kCrossDissolve, "Cross Dissolve", TrackKind::Video},
         {kDipToBlack, "Dip to Black", TrackKind::Video},
         {kWipe, "Wipe", TrackKind::Video},
+        {kDipToWhite, "Dip to White", TrackKind::Video},
+        {kAdditiveDissolve, "Additive Dissolve", TrackKind::Video},
+        {kPush, "Push", TrackKind::Video},
+        {kSlide, "Slide", TrackKind::Video},
+        {kIrisRound, "Iris Round", TrackKind::Video},
+        {kIrisBox, "Iris Box", TrackKind::Video},
+        {kCrossZoom, "Cross Zoom", TrackKind::Video},
         {kCrossfade, "Constant Power", TrackKind::Audio},
     };
     return kRegistry;

@@ -347,6 +347,8 @@ std::optional<render::Layer> SequenceVideoSource::layerFor(const model::Clip& cl
                 model::effectiveValue(clip, model::kLutEffect, "intensity", sourceTime, media.info, seq.settings) / 100.0);
         }
     }
+    // Phase 14: Lumetri, key, blur/sharpen, masks, stabilizer.
+    m_effects.apply(clip, media.info, seq.settings, sourceTime, layer);
     return layer;
 }
 
@@ -385,7 +387,17 @@ std::optional<TimedFrame> SequenceVideoSource::compose(const Rational& requested
             auto a = span.from != nullptr ? layerFor(*span.from, t) : std::nullopt;
             auto b = span.to != nullptr ? layerFor(*span.to, t) : std::nullopt;
             const auto& type = active->transition->type;
-            if (type == model::kDipToBlack) {
+            const double canvasWidth = seq.settings.width;
+            const float aspect = static_cast<float>(seq.settings.width) / static_cast<float>(std::max(1, seq.settings.height));
+            if (type == model::kDipToWhite) {
+                if (a) {
+                    a->grade.dimTarget = 1.0f;
+                }
+                if (b) {
+                    b->grade.dimTarget = 1.0f;
+                }
+            }
+            if (type == model::kDipToBlack || type == model::kDipToWhite) {
                 if (a && b) {
                     if (p < 0.5f) {
                         a->grade.dim = 2.0f * p;
@@ -399,11 +411,44 @@ std::optional<TimedFrame> SequenceVideoSource::compose(const Rational& requested
                 } else if (b) {
                     b->grade.dim = 1.0f - p;
                 }
-            } else if (type == model::kWipe) {
+            } else if (type == model::kWipe || type == model::kIrisRound || type == model::kIrisBox) {
+                const auto shape = type == model::kIrisRound ? render::WipeShape::Circle
+                                   : type == model::kIrisBox ? render::WipeShape::Box
+                                                             : render::WipeShape::Linear;
                 if (b) {
-                    b->wipe = {true, p, 0.02f, false};
+                    b->wipe = {true, p, 0.02f, false, shape, aspect};
                 } else if (a) {
-                    a->wipe = {true, p, 0.02f, true};
+                    a->wipe = {true, p, 0.02f, true, shape, aspect};
+                }
+            } else if (type == model::kPush || type == model::kSlide) {
+                // The incoming clip enters from the right; Push also moves the outgoing one out.
+                if (b) {
+                    b->transform.positionX += (1.0 - p) * canvasWidth;
+                }
+                if (a && type == model::kPush) {
+                    a->transform.positionX -= p * canvasWidth;
+                }
+                if (!b && a && type == model::kSlide) {
+                    a->transform.positionX -= p * canvasWidth;
+                }
+            } else if (type == model::kCrossZoom) {
+                if (a) {
+                    a->transform.scale *= 1.0 + 3.0 * p;
+                    a->transform.opacity *= p < 0.5f ? 1.0 : 2.0 * (1.0 - p);
+                }
+                if (b) {
+                    b->transform.scale *= 1.0 + 3.0 * (1.0 - p);
+                    b->transform.opacity *= p < 0.5f ? 2.0 * p : 1.0;
+                }
+            } else if (type == model::kAdditiveDissolve) {
+                if (a) {
+                    a->transform.opacity *= 1.0f - p;
+                }
+                if (b) {
+                    b->transform.opacity *= p;
+                    if (a) {
+                        b->transform.blend = model::BlendMode::Add;
+                    }
                 }
             } else { // Cross Dissolve (and unknown types)
                 if (b) {

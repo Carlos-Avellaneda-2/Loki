@@ -59,6 +59,23 @@ std::string clipShapeProblem(const Clip& clip) {
                 return "parameter '" + p.key + "' has invalid value or keyframes";
             }
         }
+        std::unordered_set<MaskId> maskIds;
+        for (const auto& mask : effect.masks) {
+            if (auto problem = maskProblem(mask); !problem.empty()) {
+                return "effect " + effect.id.toString() + ": " + problem;
+            }
+            if (!maskIds.insert(mask.id).second) {
+                return "effect " + effect.id.toString() + " has a duplicate mask id";
+            }
+        }
+        for (const auto& [name, points] : effect.curves) {
+            if (auto problem = curveProblem(points); !problem.empty()) {
+                return "effect " + effect.id.toString() + " curve '" + name + "': " + problem;
+            }
+        }
+        if (!std::all_of(effect.samples.begin(), effect.samples.end(), [](double v) { return std::isfinite(v); })) {
+            return "effect " + effect.id.toString() + " has non-finite analysis data";
+        }
     }
     return {};
 }

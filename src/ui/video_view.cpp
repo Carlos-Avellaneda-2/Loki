@@ -1,5 +1,7 @@
 #include "ui/video_view.h"
 
+#include <QMouseEvent>
+
 #include "render/color_conversion.h"
 
 #include <QOpenGLContext>
@@ -75,6 +77,62 @@ void VideoWindow::releaseGl() {
 
 void VideoView::setFrameTap(std::function<bool()> wanted, std::function<void(const QImage&)> tap, int intervalMs) {
     m_window->setFrameTap(std::move(wanted), std::move(tap), intervalMs);
+}
+
+void VideoView::setOverlay(VideoOverlay overlay) {
+    m_window->setOverlay(std::move(overlay));
+}
+
+void VideoView::updateOverlay() {
+    m_window->requestUpdate();
+}
+
+void VideoWindow::setOverlay(VideoOverlay overlay) {
+    m_overlay = std::move(overlay);
+    update();
+}
+
+QRectF VideoWindow::pictureRect() const {
+    if (!m_composite || m_composite->width <= 0) {
+        return {};
+    }
+    const auto r = render::fitRect(static_cast<float>(m_composite->width), static_cast<float>(m_composite->height),
+                                   static_cast<float>(width()), static_cast<float>(height()));
+    return {r[0], r[1], r[2], r[3]};
+}
+
+bool VideoWindow::mouseToOverlay(QMouseEvent* event) {
+    const auto picture = pictureRect();
+    if (!m_overlay.mouse || picture.isEmpty() || !m_composite) {
+        return false;
+    }
+    const double scale = m_composite->width / picture.width();
+    const QPointF canvas = (event->position() - picture.topLeft()) * scale;
+    return m_overlay.mouse(static_cast<int>(event->type()), event->button(), event->modifiers(), canvas, scale);
+}
+
+void VideoWindow::mousePressEvent(QMouseEvent* event) {
+    if (!mouseToOverlay(event)) {
+        QOpenGLWindow::mousePressEvent(event);
+    }
+}
+
+void VideoWindow::mouseMoveEvent(QMouseEvent* event) {
+    if (!mouseToOverlay(event)) {
+        QOpenGLWindow::mouseMoveEvent(event);
+    }
+}
+
+void VideoWindow::mouseReleaseEvent(QMouseEvent* event) {
+    if (!mouseToOverlay(event)) {
+        QOpenGLWindow::mouseReleaseEvent(event);
+    }
+}
+
+void VideoWindow::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (!mouseToOverlay(event)) {
+        QOpenGLWindow::mouseDoubleClickEvent(event);
+    }
 }
 
 void VideoWindow::setFrameTap(std::function<bool()> wanted, std::function<void(const QImage&)> tap, int intervalMs) {
@@ -172,6 +230,11 @@ void VideoWindow::paintGL() {
             }
         }
         m_compositor.present(defaultFramebufferObject(), w, h);
+        if (m_overlay.paint) {
+            QPainter painter(this);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            m_overlay.paint(painter, pictureRect(), QSizeF(m_composite->width, m_composite->height));
+        }
         return;
     }
     if (m_ready && m_frame) {

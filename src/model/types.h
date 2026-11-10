@@ -2,6 +2,7 @@
 
 #include "model/ids.h"
 #include "model/keyframe.h"
+#include "model/mask.h"
 #include "util/rational.h"
 
 #include <cstdint>
@@ -94,6 +95,20 @@ struct Effect {
     std::vector<Parameter> parameters;
     // Non-animatable text parameters (title text, font, LUT file) (D20).
     std::map<std::string, std::string> strings;
+    // Phase 14 (format v4): masks limiting where the effect applies (D34), color curves by name
+    // ("master", "red", "green", "blue", D33) and analysis data (stabilizer, D36).
+    std::vector<Mask> masks;
+    std::map<std::string, std::vector<CurvePoint>> curves;
+    std::vector<double> samples;
+
+    [[nodiscard]] const Mask* findMask(MaskId maskId) const noexcept {
+        for (const auto& m : masks) {
+            if (m.id == maskId) {
+                return &m;
+            }
+        }
+        return nullptr;
+    }
 
     [[nodiscard]] std::string string(const std::string& key, const std::string& fallback = {}) const {
         const auto it = strings.find(key);

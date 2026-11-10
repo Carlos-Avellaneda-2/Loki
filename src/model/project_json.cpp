@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cmath>
@@ -23,8 +24,10 @@ using Migration = void (*)(json&);
 void migrate1to2(json&) {}
 // v2 -> v3: only additions (speed, reverse, markers, nested media); v2 documents are valid.
 void migrate2to3(json&) {}
+// v3 -> v4: only additions (effect masks, curves, analysis samples); v3 documents are valid.
+void migrate3to4(json&) {}
 
-constexpr std::array<Migration, kProjectFormatVersion - 1> kMigrations{&migrate1to2, &migrate2to3};
+constexpr std::array<Migration, kProjectFormatVersion - 1> kMigrations{&migrate1to2, &migrate2to3, &migrate3to4};
 
 // ---------------------------------------------------------------------------------------------
 // Writing
@@ -47,18 +50,45 @@ const char* interpolationName(Interpolation i) {
     return "linear";
 }
 
+json parameterToJson(const Parameter& p) {
+    json keys = json::array();
+    for (const auto& k : p.keyframes) {
+        keys.push_back({{"time", rationalToJson(k.time)},
+                        {"value", k.value},
+                        {"interpolation", interpolationName(k.interpolation)},
+                        {"easeIn", k.easeIn},
+                        {"easeOut", k.easeOut}});
+    }
+    return {{"key", p.key}, {"value", p.value}, {"keyframes", std::move(keys)}};
+}
+
+json pathToJson(const std::vector<MaskVertex>& path) {
+    json list = json::array();
+    for (const auto& v : path) {
+        list.push_back(json::array({v.x, v.y, v.inX, v.inY, v.outX, v.outY}));
+    }
+    return list;
+}
+
+json maskToJson(const Mask& m) {
+    json keys = json::array();
+    for (const auto& k : m.keyframes) {
+        keys.push_back({{"time", rationalToJson(k.time)}, {"path", pathToJson(k.path)}});
+    }
+    return {{"id", idToJson(m.id)},
+            {"name", m.name},
+            {"mode", m.mode == MaskMode::Subtract ? "subtract" : "add"},
+            {"inverted", m.inverted},
+            {"path", pathToJson(m.path)},
+            {"pathKeys", std::move(keys)},
+            {"parameters", json::array({parameterToJson(m.feather), parameterToJson(m.opacity),
+                                        parameterToJson(m.expansion)})}};
+}
+
 json effectToJson(const Effect& effect) {
     json params = json::array();
     for (const auto& p : effect.parameters) {
-        json keys = json::array();
-        for (const auto& k : p.keyframes) {
-            keys.push_back({{"time", rationalToJson(k.time)},
-                            {"value", k.value},
-                            {"interpolation", interpolationName(k.interpolation)},
-                            {"easeIn", k.easeIn},
-                            {"easeOut", k.easeOut}});
-        }
-        params.push_back({{"key", p.key}, {"value", p.value}, {"keyframes", std::move(keys)}});
+        params.push_back(parameterToJson(p));
     }
     json j = {{"id", idToJson(effect.id)},
               {"type", effect.type},
@@ -66,6 +96,28 @@ json effectToJson(const Effect& effect) {
               {"parameters", std::move(params)}};
     if (!effect.strings.empty()) {
         j["strings"] = effect.strings;
+    }
+    // v4 (D33-D36): omitted when empty.
+    if (!effect.masks.empty()) {
+        json masks = json::array();
+        for (const auto& m : effect.masks) {
+            masks.push_back(maskToJson(m));
+        }
+        j["masks"] = std::move(masks);
+    }
+    if (!effect.curves.empty()) {
+        json curves = json::object();
+        for (const auto& [name, points] : effect.curves) {
+            json list = json::array();
+            for (const auto& p : points) {
+                list.push_back(json::array({p.x, p.y}));
+            }
+            curves[name] = std::move(list);
+        }
+        j["curves"] = std::move(curves);
+    }
+    if (!effect.samples.empty()) {
+        j["samples"] = effect.samples;
     }
     return j;
 }
@@ -428,6 +480,69 @@ private:
         return markers;
     }
 
+    static Parameter readParameter(const json& j, const std::string& pAt) {
+        Parameter p;
+        p.key = string(j, "key", pAt);
+        p.value = number(j, "value", pAt);
+        const auto& keys = array(j, "keyframes", pAt);
+        for (std::size_t k = 0; k < keys.size(); ++k) {
+            const std::string kAt = pAt + "/keyframes/" + std::to_string(k);
+            Keyframe kf;
+            kf.time = rational(keys[k], "time", kAt);
+            kf.value = number(keys[k], "value", kAt);
+            kf.interpolation = interpolation(keys[k], kAt);
+            kf.easeIn = number(keys[k], "easeIn", kAt);
+            kf.easeOut = number(keys[k], "easeOut", kAt);
+            p.keyframes.push_back(kf);
+        }
+        return p;
+    }
+
+    static std::vector<MaskVertex> readPath(const json& obj, const char* key, const std::string& at) {
+        std::vector<MaskVertex> path;
+        const auto& list = array(obj, key, at);
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            const auto& v = list[i];
+            const std::string vAt = at + "/" + key + "/" + std::to_string(i);
+            if (!v.is_array() || v.size() != 6 || !std::all_of(v.begin(), v.end(), [](const json& n) { return n.is_number(); })) {
+                fail(vAt, "expected [x, y, inX, inY, outX, outY]");
+            }
+            path.push_back({v[0].get<double>(), v[1].get<double>(), v[2].get<double>(), v[3].get<double>(),
+                            v[4].get<double>(), v[5].get<double>()});
+        }
+        return path;
+    }
+
+    static Mask readMask(const json& j, const std::string& at) {
+        Mask m;
+        m.id = id<MaskId>(j, "id", at, false);
+        m.name = string(j, "name", at);
+        const auto mode = string(j, "mode", at);
+        if (mode != "add" && mode != "subtract") {
+            fail(at + "/mode", "unknown mask mode '" + mode + "'");
+        }
+        m.mode = mode == "subtract" ? MaskMode::Subtract : MaskMode::Add;
+        m.inverted = boolean(j, "inverted", at);
+        m.path = readPath(j, "path", at);
+        const auto& keys = array(j, "pathKeys", at);
+        for (std::size_t k = 0; k < keys.size(); ++k) {
+            const std::string kAt = at + "/pathKeys/" + std::to_string(k);
+            m.keyframes.push_back({rational(keys[k], "time", kAt), readPath(keys[k], "path", kAt)});
+        }
+        const auto& params = array(j, "parameters", at);
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            auto p = readParameter(params[i], at + "/parameters/" + std::to_string(i));
+            if (p.key == "feather") {
+                m.feather = std::move(p);
+            } else if (p.key == "opacity") {
+                m.opacity = std::move(p);
+            } else if (p.key == "expansion") {
+                m.expansion = std::move(p);
+            }
+        }
+        return m;
+    }
+
     static Effect readEffect(const json& j, const std::string& at) {
         Effect e;
         e.id = id<EffectId>(j, "id", at, false);
@@ -435,22 +550,42 @@ private:
         e.enabled = boolean(j, "enabled", at);
         const auto& params = array(j, "parameters", at);
         for (std::size_t i = 0; i < params.size(); ++i) {
-            const std::string pAt = at + "/parameters/" + std::to_string(i);
-            Parameter p;
-            p.key = string(params[i], "key", pAt);
-            p.value = number(params[i], "value", pAt);
-            const auto& keys = array(params[i], "keyframes", pAt);
-            for (std::size_t k = 0; k < keys.size(); ++k) {
-                const std::string kAt = pAt + "/keyframes/" + std::to_string(k);
-                Keyframe kf;
-                kf.time = rational(keys[k], "time", kAt);
-                kf.value = number(keys[k], "value", kAt);
-                kf.interpolation = interpolation(keys[k], kAt);
-                kf.easeIn = number(keys[k], "easeIn", kAt);
-                kf.easeOut = number(keys[k], "easeOut", kAt);
-                p.keyframes.push_back(kf);
+            e.parameters.push_back(readParameter(params[i], at + "/parameters/" + std::to_string(i)));
+        }
+        if (j.contains("masks")) {
+            const auto& masks = array(j, "masks", at);
+            for (std::size_t i = 0; i < masks.size(); ++i) {
+                e.masks.push_back(readMask(masks[i], at + "/masks/" + std::to_string(i)));
             }
-            e.parameters.push_back(std::move(p));
+        }
+        if (j.contains("curves")) {
+            const auto& curves = field(j, "curves", at);
+            if (!curves.is_object()) {
+                fail(at + "/curves", "expected an object");
+            }
+            for (const auto& [name, list] : curves.items()) {
+                const std::string cAt = at + "/curves/" + name;
+                if (!list.is_array()) {
+                    fail(cAt, "expected an array of [x, y]");
+                }
+                std::vector<CurvePoint> points;
+                for (const auto& pt : list) {
+                    if (!pt.is_array() || pt.size() != 2 || !pt[0].is_number() || !pt[1].is_number()) {
+                        fail(cAt, "expected [x, y] points");
+                    }
+                    points.push_back({pt[0].get<double>(), pt[1].get<double>()});
+                }
+                e.curves[name] = std::move(points);
+            }
+        }
+        if (j.contains("samples")) {
+            const auto& samples = array(j, "samples", at);
+            for (const auto& v : samples) {
+                if (!v.is_number()) {
+                    fail(at + "/samples", "expected numbers");
+                }
+                e.samples.push_back(v.get<double>());
+            }
         }
         if (j.contains("strings")) {
             const auto& strings = field(j, "strings", at);

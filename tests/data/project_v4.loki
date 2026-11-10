@@ -1,0 +1,72 @@
+{
+  "format": "loki-project",
+  "version": 4,
+  "bins": [],
+  "media": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "interview",
+      "path": "C:/media/interview.mp4",
+      "bin": null,
+      "info": {
+        "hasVideo": true, "hasAudio": true, "width": 1920, "height": 1080,
+        "frameRate": [30, 1], "duration": [60, 1], "sampleRate": 48000, "audioChannels": 2,
+        "videoCodec": "h264", "audioCodec": "aac"
+      }
+    }
+  ],
+  "sequences": [
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "Main",
+      "settings": { "width": 1920, "height": 1080, "frameRate": [30, 1], "sampleRate": 48000 },
+      "videoTracks": [
+        {
+          "id": "44444444-4444-4444-8444-444444444441",
+          "name": "V1", "locked": false, "hidden": false, "muted": false,
+          "clips": [
+            {
+              "id": "55555555-5555-4555-8555-555555555551",
+              "media": "11111111-1111-4111-8111-111111111111",
+              "name": "graded", "start": [0, 1], "sourceIn": [5, 1], "duration": [4, 1],
+              "enabled": true, "link": null,
+              "effects": [
+                {
+                  "id": "66666666-6666-4666-8666-666666666661",
+                  "type": "loki.lumetri", "enabled": true,
+                  "parameters": [ { "key": "vignetteAmount", "value": -40.0, "keyframes": [] } ],
+                  "curves": { "master": [[0.0, 0.0], [0.5, 0.58], [1.0, 1.0]] },
+                  "masks": [
+                    {
+                      "id": "77777777-7777-4777-8777-777777777771",
+                      "name": "Face",
+                      "mode": "add",
+                      "inverted": false,
+                      "path": [],
+                      "pathKeys": [
+                        { "time": [5, 1], "path": [[800, 300, 0, 0, 0, 0], [1100, 300, 0, 0, 0, 0], [1100, 700, 0, 0, 0, 0], [800, 700, 0, 0, 0, 0]] },
+                        { "time": [6, 1], "path": [[840, 310, 0, 0, 0, 0], [1140, 310, 0, 0, 0, 0], [1140, 710, 0, 0, 0, 0], [840, 710, 0, 0, 0, 0]] }
+                      ],
+                      "parameters": [
+                        { "key": "feather", "value": 40.0, "keyframes": [] },
+                        { "key": "opacity", "value": 100.0, "keyframes": [] },
+                        { "key": "expansion", "value": 0.0, "keyframes": [] }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "66666666-6666-4666-8666-666666666662",
+                  "type": "loki.stabilizer", "enabled": true,
+                  "parameters": [],
+                  "samples": [1, 30, 1, 5, 1, 1920, 1080, 1, 0.0, 0.0, 0.0, 1.0]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "audioTracks": []
+    }
+  ]
+}

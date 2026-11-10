@@ -282,6 +282,55 @@ Todos los clips de video tienen estos efectos en Effect Controls (selecciona el 
 
 **Reset** devuelve el efecto a sus valores por defecto.
 
+### Lumetri Color
+
+Arrastra **Lumetri Color** sobre un clip (o una capa de ajuste). En Effect Controls:
+- **Ruedas** (Shadows, Midtones, Highlights): **Hue** elige el tono, **Color** cuánto se tiñe y **Brightness**
+  aclara u oscurece ese rango. Las ruedas no cambian el brillo, solo el color.
+- **Curves:** elige Master, Red, Green o Blue. Clic agrega un punto, arrastra para moverlo, clic derecho lo borra.
+  Los extremos solo se mueven arriba y abajo. Cada arrastre es un solo Ctrl+Z.
+- **HSL Secondary:** ponlo en On, elige el tono a corregir (**HSL Hue** y **Hue Range**), los mínimos de
+  saturación y luma, y la corrección: **Hue Shift**, **Saturation**, **Brightness**. **Show Mask** muestra en
+  gris qué se seleccionó.
+- **Vignette:** **Amount** negativo oscurece las esquinas, positivo las aclara; **Midpoint** y **Feather** dicen
+  dónde empieza y qué tan suave es.
+
+### Máscaras
+
+Los efectos Opacity, Color Correction, Lumetri Color, LUT, Gaussian Blur y Sharpen tienen **Masks** en Effect
+Controls:
+- **◯** crea una elipse, **▭** un rectángulo y **✎** (pluma) una máscara libre: haz clic en el monitor de programa
+  para cada punto (arrastra al hacer clic para un punto curvo) y haz clic en el primero para cerrar.
+- Clic en el nombre de una máscara la edita en el monitor de programa: arrastra un punto para moverlo o arrastra
+  dentro para mover toda la máscara.
+- Cada máscara tiene **Add/Subtract** (sumar o restar a las otras), **Inverted**, **feather** (borde suave),
+  **opacity** y **expansion** (crece o se achica).
+- **◀◀ / ▶▶** siguen la máscara hacia atrás / adelante desde el cabezal (por ejemplo una cara). El seguimiento
+  corre en segundo plano y guarda una posición por fotograma; se puede deshacer de una vez.
+- Ejemplo para tapar una cara: Gaussian Blur + máscara elíptica + ▶▶.
+
+### Ultra Key (chroma)
+
+1. Arrastra **Ultra Key** sobre el clip filmado contra verde o azul (pon el fondo nuevo en la pista de abajo).
+2. **Key Color** elige el color a quitar (verde por defecto).
+3. **Tolerance** cuánto color se quita, **Softness** qué tan suave es el borde, **Choke** achica el recorte y
+   **Spill Suppression** quita el reflejo verde de los bordes.
+4. **Output: Alpha Channel** muestra el recorte en blanco y negro para revisarlo.
+
+### Warp Stabilizer
+
+1. Arrastra **Warp Stabilizer** sobre el clip y pulsa **Analyze**. El análisis corre en segundo plano (en tu PC
+   tarda algo más que la duración del clip) y se puede cancelar.
+2. **Smoothness**: cuánto se suaviza el movimiento. **Method**: solo posición, o posición, escala y rotación.
+   **Framing**: con *Crop, Auto-scale* acerca lo justo para no ver bordes negros.
+3. Cambiar estos valores no necesita analizar de nuevo. Si recortas el clip a otra parte del medio, pulsa
+   **Analyze Again**.
+
+### Gaussian Blur y Sharpen
+
+- **Gaussian Blur:** **Blurriness** en píxeles y la dirección (las dos, horizontal o vertical).
+- **Sharpen:** **Sharpen Amount** (100 = el doble de detalle).
+
 ### Corrección de color y LUT
 
 1. Abre el panel **Effects** (pestaña junto a Project).
@@ -305,6 +354,12 @@ Todos los clips de video tienen estos efectos en Effect Controls (selecciona el 
 | Cross Dissolve | Video: fundido de un clip al otro |
 | Dip to Black | Video: el saliente va a negro y luego aparece el entrante |
 | Wipe | Video: barrido de izquierda a derecha |
+| Dip to White | Video: como Dip to Black, pero a blanco |
+| Additive Dissolve | Video: fundido que suma las imágenes (más brillante en el medio) |
+| Push | Video: el entrante empuja al saliente hacia la izquierda |
+| Slide | Video: el entrante se desliza encima del saliente |
+| Iris Round / Iris Box | Video: el entrante aparece en un círculo / rectángulo que crece desde el centro |
+| Cross Zoom | Video: el saliente se acerca y el entrante llega desde muy cerca |
 | Constant Power | Audio: crossfade |
 
 - **Aplicar:** arrastra la transición desde el panel Effects hasta un corte o un borde de clip. El lado del clip

@@ -19,7 +19,8 @@ std::array<double, 9> layerToCanvas(const Layer& layer) noexcept {
     const double e = c * s;
     const double tx = x.positionX - (a * x.anchorX + b * x.anchorY);
     const double ty = x.positionY - (d * x.anchorX + e * x.anchorY);
-    return {a, b, tx, d, e, ty, 0.0, 0.0, 1.0};
+    // Stabilizer correction first (in source pixels), then Motion.
+    return multiply({a, b, tx, d, e, ty, 0.0, 0.0, 1.0}, layer.pre);
 }
 
 std::array<double, 2> transformPoint(const std::array<double, 9>& m, double x, double y) noexcept {

@@ -66,6 +66,7 @@ const std::vector<EffectDef>& effectRegistry() {
             {"opacity", "Opacity", 100, DefaultKind::Constant, 0, 100, 1, 1, "%", {}, true},
             {"blendMode", "Blend Mode", 0, DefaultKind::Constant, 0, kBlendModeCount - 1, 1, 0, "", modes, false},
         };
+        opacity.masks = true;
         r.push_back(std::move(opacity));
 
         EffectDef volume;
@@ -118,6 +119,7 @@ const std::vector<EffectDef>& effectRegistry() {
             {"saturation", "Saturation", 100, DefaultKind::Constant, 0, 200, 1, 1, "%", {}, true},
             {"temperature", "Temperature", 0, DefaultKind::Constant, -100, 100, 1, 1, "", {}, true},
         };
+        color.masks = true;
         r.push_back(std::move(color));
 
         EffectDef lut;
@@ -127,7 +129,83 @@ const std::vector<EffectDef>& effectRegistry() {
             {"intensity", "Intensity", 100, DefaultKind::Constant, 0, 100, 1, 1, "%", {}, true},
         };
         lut.strings = {{"file", "LUT File (.cube)", "", StringKind::File}};
+        lut.masks = true;
         r.push_back(std::move(lut));
+
+        const std::vector<std::string> offOn{"Off", "On"};
+        EffectDef lumetri;
+        lumetri.type = std::string(kLumetriEffect);
+        lumetri.label = "Lumetri Color";
+        lumetri.masks = true;
+        lumetri.curves = true;
+        for (const auto& [range, label] : {std::pair{"shadows", "Shadows"}, std::pair{"midtones", "Midtones"},
+                                           std::pair{"highlights", "Highlights"}}) {
+            const std::string k(range);
+            const std::string l(label);
+            lumetri.parameters.push_back({k + "Hue", l + " Hue", 0, DefaultKind::Constant, 0, 360, 1, 0, "\xC2\xB0", {}, true});
+            lumetri.parameters.push_back({k + "Amount", l + " Color", 0, DefaultKind::Constant, 0, 100, 1, 1, "%", {}, true});
+            lumetri.parameters.push_back({k + "Luma", l + " Brightness", 0, DefaultKind::Constant, -100, 100, 1, 1, "", {}, true});
+        }
+        lumetri.parameters.push_back({"hslEnabled", "HSL Secondary", 0, DefaultKind::Constant, 0, 1, 1, 0, "", offOn, false});
+        lumetri.parameters.push_back({"hslHue", "HSL Hue", 120, DefaultKind::Constant, 0, 360, 1, 0, "\xC2\xB0", {}, true});
+        lumetri.parameters.push_back({"hslRange", "HSL Hue Range", 30, DefaultKind::Constant, 0, 180, 1, 0, "\xC2\xB0", {}, true});
+        lumetri.parameters.push_back({"hslSoftness", "HSL Softness", 20, DefaultKind::Constant, 0, 100, 1, 0, "", {}, true});
+        lumetri.parameters.push_back({"hslSatMin", "HSL Min Saturation", 10, DefaultKind::Constant, 0, 100, 1, 0, "%", {}, true});
+        lumetri.parameters.push_back({"hslLumaMin", "HSL Min Luma", 0, DefaultKind::Constant, 0, 100, 1, 0, "%", {}, true});
+        lumetri.parameters.push_back({"hslLumaMax", "HSL Max Luma", 100, DefaultKind::Constant, 0, 100, 1, 0, "%", {}, true});
+        lumetri.parameters.push_back({"hslHueShift", "HSL Hue Shift", 0, DefaultKind::Constant, -180, 180, 1, 0, "\xC2\xB0", {}, true});
+        lumetri.parameters.push_back({"hslSaturation", "HSL Saturation", 100, DefaultKind::Constant, 0, 200, 1, 0, "%", {}, true});
+        lumetri.parameters.push_back({"hslLuma", "HSL Brightness", 0, DefaultKind::Constant, -100, 100, 1, 0, "", {}, true});
+        lumetri.parameters.push_back({"hslShowMask", "Show Mask", 0, DefaultKind::Constant, 0, 1, 1, 0, "", offOn, false});
+        lumetri.parameters.push_back({"vignetteAmount", "Vignette Amount", 0, DefaultKind::Constant, -100, 100, 1, 1, "", {}, true});
+        lumetri.parameters.push_back({"vignetteMidpoint", "Vignette Midpoint", 50, DefaultKind::Constant, 0, 100, 1, 1, "", {}, true});
+        lumetri.parameters.push_back({"vignetteFeather", "Vignette Feather", 50, DefaultKind::Constant, 0, 100, 1, 1, "", {}, true});
+        r.push_back(std::move(lumetri));
+
+        EffectDef key;
+        key.type = std::string(kUltraKeyEffect);
+        key.label = "Ultra Key";
+        key.parameters = {
+            {"tolerance", "Tolerance", 30, DefaultKind::Constant, 0, 100, 1, 1, "", {}, true},
+            {"softness", "Softness", 15, DefaultKind::Constant, 0, 100, 1, 1, "", {}, true},
+            {"choke", "Choke", 0, DefaultKind::Constant, 0, 100, 1, 1, "", {}, true},
+            {"spill", "Spill Suppression", 50, DefaultKind::Constant, 0, 100, 1, 1, "", {}, true},
+            {"output", "Output", 0, DefaultKind::Constant, 0, 1, 1, 0, "", {"Composite", "Alpha Channel"}, false},
+        };
+        key.strings = {{"keyColor", "Key Color", "#00ff00", StringKind::Color}};
+        r.push_back(std::move(key));
+
+        EffectDef blur;
+        blur.type = std::string(kGaussianBlurEffect);
+        blur.label = "Gaussian Blur";
+        blur.masks = true;
+        blur.parameters = {
+            {"blurriness", "Blurriness", 10, DefaultKind::Constant, 0, 500, 1, 1, "px", {}, true},
+            {"dimensions", "Blur Dimensions", 0, DefaultKind::Constant, 0, 2, 1, 0, "",
+             {"Horizontal and Vertical", "Horizontal", "Vertical"}, false},
+        };
+        r.push_back(std::move(blur));
+
+        EffectDef sharpen;
+        sharpen.type = std::string(kSharpenEffect);
+        sharpen.label = "Sharpen";
+        sharpen.masks = true;
+        sharpen.parameters = {
+            {"amount", "Sharpen Amount", 50, DefaultKind::Constant, 0, 500, 1, 0, "", {}, true},
+        };
+        r.push_back(std::move(sharpen));
+
+        EffectDef stabilizer;
+        stabilizer.type = std::string(kStabilizerEffect);
+        stabilizer.label = "Warp Stabilizer";
+        stabilizer.analysis = true;
+        stabilizer.parameters = {
+            {"smoothness", "Smoothness", 50, DefaultKind::Constant, 0, 100, 1, 0, "%", {}, false},
+            {"method", "Method", 1, DefaultKind::Constant, 0, 1, 1, 0, "", {"Position", "Position, Scale, Rotation"}, false},
+            {"framing", "Framing", 1, DefaultKind::Constant, 0, 1, 1, 0, "",
+             {"Stabilize Only", "Stabilize, Crop, Auto-scale"}, false},
+        };
+        r.push_back(std::move(stabilizer));
         return r;
     }();
     return kRegistry;

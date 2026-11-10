@@ -9,6 +9,8 @@ add_library(loki_render_core STATIC
     composite.cpp
     cpu_compositor.h
     cpu_compositor.cpp
+    effects.h
+    effects.cpp
     grading.h
     grading.cpp
     scopes.h

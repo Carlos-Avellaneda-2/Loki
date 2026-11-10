@@ -150,7 +150,7 @@ TEST(ModelPhase13Test, Version3RoundTripsSpeedMarkersAndNests) {
     builder.addMedia(media).addMedia(nest).addSequence(seq).addSequence(inner);
     const auto project = builder.build();
     const auto text = serializeProject(project);
-    EXPECT_NE(text.find("\"version\": 3"), std::string::npos);
+    EXPECT_NE(text.find("\"version\": " + std::to_string(kProjectFormatVersion)), std::string::npos);
     EXPECT_EQ(parseProject(text), project);
 }
 

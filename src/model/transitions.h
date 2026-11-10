@@ -13,6 +13,14 @@ inline constexpr std::string_view kCrossDissolve = "loki.crossDissolve";
 inline constexpr std::string_view kDipToBlack = "loki.dipToBlack";
 inline constexpr std::string_view kWipe = "loki.wipe";
 inline constexpr std::string_view kCrossfade = "loki.crossfade"; // audio, constant power
+// Phase 14 (D37).
+inline constexpr std::string_view kDipToWhite = "loki.dipToWhite";
+inline constexpr std::string_view kAdditiveDissolve = "loki.additiveDissolve";
+inline constexpr std::string_view kPush = "loki.push";
+inline constexpr std::string_view kSlide = "loki.slide";
+inline constexpr std::string_view kIrisRound = "loki.irisRound";
+inline constexpr std::string_view kIrisBox = "loki.irisBox";
+inline constexpr std::string_view kCrossZoom = "loki.crossZoom";
 
 struct TransitionDef {
     std::string_view type;

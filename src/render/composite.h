@@ -2,6 +2,7 @@
 
 #include "media/video_frame.h"
 #include "model/effect_registry.h"
+#include "render/effects.h"
 #include "render/grading.h"
 
 #include <array>
@@ -23,8 +24,14 @@ struct Layer {
     double sourceWidth = 0;
     double sourceHeight = 0;
     model::ClipTransform transform;
-    LayerGrade grade; // color correction, LUT, dip to black (Phase 9)
-    WipeMask wipe;    // wipe transition mask (canvas space)
+    LayerGrade grade; // color correction, Lumetri, LUT, dip to black/white
+    WipeMask wipe;    // wipe / iris transition mask (canvas space)
+    // Phase 14: Ultra Key (D35), blur/sharpen (D37), per-stage masks (D34) and the stabilizer
+    // correction (D36, source pixels -> source pixels, applied before Motion).
+    KeyParams key;
+    BlurParams blur;
+    LayerMasks masks;
+    Matrix3 pre = identityMatrix();
     // Nested sequence (D30): the picture is this composite (transparent where empty), rendered at
     // sourceWidth x sourceHeight; `frame` is unused.
     std::shared_ptr<const CompositeFrame> nested;

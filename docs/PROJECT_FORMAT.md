@@ -1,4 +1,4 @@
-# Formato de proyecto `.loki` (versión 3)
+# Formato de proyecto `.loki` (versión 4)
 
 Archivo JSON en UTF-8. Lo escribe `model::saveProjectFile` y lo lee `model::loadProjectFile`
 (`src/model/project_json.*`).
@@ -85,6 +85,7 @@ Si algo falla se lanza `ProjectFormatError` con la ruta JSON del problema, por e
 - `tests/data/project_v1.loki` es el golden de la versión 1 y debe seguir abriendo siempre.
 - `tests/data/project_v2.loki` es el golden de la versión 2.
 - `tests/data/project_v3.loki` es el golden de la versión 3.
+- `tests/data/project_v4.loki` es el golden de la versión 4.
 
 ## Versión 2 (Fase 9, D19–D20)
 
@@ -122,4 +123,26 @@ La migración de v2 a v3 no cambia nada: todo lo nuevo es opcional.
     ninguna secuencia puede contenerse a sí misma (directa o indirectamente).
   - `"generator": "loki.adjustment"`: capa de ajuste; sus efectos de color se aplican a las pistas de abajo.
 - Una secuencia usada por un medio `loki.nest` no se puede borrar sin borrar antes ese medio.
+
+## Versión 4 (Fase 14, D33–D37)
+
+La migración de v3 a v4 no cambia nada: todo lo nuevo es opcional y va dentro de los efectos.
+
+- `"masks"`: lista de máscaras del efecto (efectos con máscaras: opacity, color, lumetri, lut, gaussianBlur,
+  sharpen).
+  - `id`, `name`, `mode` (`add` / `subtract`), `inverted`.
+  - `path`: vértices `[x, y, inX, inY, outX, outY]` en píxeles del medio; las manijas son relativas al vértice
+    (0, 0 = esquina). Se usa cuando `pathKeys` está vacío.
+  - `pathKeys`: `[{ "time", "path" }]` en tiempo del origen, ordenados, todos con la misma cantidad de vértices
+    (máscara animada o seguida).
+  - `parameters`: `feather` (px), `opacity` (%), `expansion` (px), con el mismo formato que los parámetros de
+    efecto.
+- `"curves"`: `{ "master" | "red" | "green" | "blue": [[x, y], ...] }`, al menos 2 puntos con x creciente, todo
+  en 0…1. Una curva identidad se omite.
+- `"samples"`: números de un análisis. Estabilizador (`loki.stabilizer`):
+  `[1, rateNum, rateDen, startNum, startDen, ancho, alto, n, (dx, dy, rotación, escala) × n]`.
+- Efectos nuevos: `loki.lumetri`, `loki.ultraKey` (texto `keyColor` `#rrggbb`), `loki.gaussianBlur`,
+  `loki.sharpen`, `loki.stabilizer`.
+- Transiciones nuevas: `loki.dipToWhite`, `loki.additiveDissolve`, `loki.push`, `loki.slide`, `loki.irisRound`,
+  `loki.irisBox`, `loki.crossZoom`.
 

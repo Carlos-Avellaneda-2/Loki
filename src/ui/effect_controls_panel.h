@@ -6,11 +6,17 @@
 
 #include <QWidget>
 
+#include <QFutureWatcher>
+
+#include <atomic>
 #include <chrono>
+#include <memory>
 #include <functional>
 #include <optional>
 #include <vector>
 
+class QCheckBox;
+class QGridLayout;
 class QComboBox;
 class QDoubleSpinBox;
 class QFontComboBox;
@@ -24,6 +30,7 @@ namespace loki::ui {
 
 class ProjectController;
 class KeyframeLane;
+class CurveEditor;
 
 // Effect Controls: Motion and Opacity (and later effects) of the selected clip. Each parameter has
 // a stopwatch (animate on/off), a value editor, previous/add-remove/next keyframe buttons and a
@@ -62,6 +69,25 @@ public:
     // Effect types shown for the current clip, in order (tests).
     [[nodiscard]] std::vector<std::string> shownEffects() const;
 
+    // Phase 14 (public for tests and the main window).
+    void setCurve(const std::string& effectType, const std::string& curve, const std::vector<model::CurvePoint>& points,
+                  bool finished);
+    void addShapeMask(const std::string& effectType, bool ellipse);
+    void editMask(const std::string& effectType, const model::Mask& mask);
+    void deleteMask(const std::string& effectType, model::MaskId mask);
+    // Background jobs (one at a time): stabilizer analysis and mask tracking from the playhead.
+    void analyzeStabilizer(const std::string& effectType);
+    void trackMask(const std::string& effectType, model::MaskId mask, bool forward);
+    void cancelJob();
+    [[nodiscard]] bool jobRunning() const;
+    [[nodiscard]] QString jobStatus() const;
+
+signals:
+    // A mask was chosen in the panel (edit it on the Program Monitor), or the Pen tool was asked for.
+    void maskSelected(loki::model::ClipId clip, const QString& effectType, loki::model::MaskId mask);
+    void penRequested(loki::model::ClipId clip, const QString& effectType);
+    void jobFinished(bool ok);
+
 private:
     struct Row {
         std::string effectType;
@@ -78,6 +104,32 @@ private:
         QToolButton* color = nullptr;
     };
     [[nodiscard]] std::vector<std::string> effectTypesFor(const model::Clip& clip) const;
+    // What needs a rebuild when it changes: effect types, mask ids, analyzed or not.
+    [[nodiscard]] std::string structureOf(const model::Clip& clip) const;
+    int addPhase14Rows(QGridLayout* grid, QWidget* group, const model::EffectDef& def, const model::Clip& clip, int row);
+    void refreshPhase14();
+    // Runs `work` on a worker thread; the caller connects m_job's finished() to apply the result.
+    void startJob(const QString& label, std::function<void(const std::atomic<bool>&, std::function<void(double)>)> work);
+
+    struct MaskRow {
+        std::string effectType;
+        model::MaskId id;
+        QComboBox* mode = nullptr;
+        QCheckBox* inverted = nullptr;
+        QDoubleSpinBox* feather = nullptr;
+        QDoubleSpinBox* opacity = nullptr;
+        QDoubleSpinBox* expansion = nullptr;
+    };
+    std::vector<MaskRow> m_maskRows;
+    CurveEditor* m_curveEditor = nullptr;
+    std::string m_curveEffect;
+    commands::GestureId m_curveGesture = 0;
+    std::string m_structure;
+    QLabel* m_jobLabel = nullptr;
+    std::shared_ptr<std::atomic<bool>> m_jobCancel;
+    std::shared_ptr<std::atomic<double>> m_jobProgress;
+    QString m_jobName;
+    QFutureWatcher<std::function<void()>> m_job;
     void rebuildTransition();
 
     void rebuild();

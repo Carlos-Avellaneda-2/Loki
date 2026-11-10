@@ -20,6 +20,18 @@ inline constexpr std::string_view kPannerEffect = "loki.panner";
 inline constexpr std::string_view kColorEffect = "loki.color";
 inline constexpr std::string_view kLutEffect = "loki.lut";
 inline constexpr std::string_view kTextEffect = "loki.text";
+// Phase 14: Lumetri Color (D33), Ultra Key (D35), Warp Stabilizer (D36), Gaussian Blur and
+// Sharpen (D37).
+inline constexpr std::string_view kLumetriEffect = "loki.lumetri";
+inline constexpr std::string_view kUltraKeyEffect = "loki.ultraKey";
+inline constexpr std::string_view kStabilizerEffect = "loki.stabilizer";
+inline constexpr std::string_view kGaussianBlurEffect = "loki.gaussianBlur";
+inline constexpr std::string_view kSharpenEffect = "loki.sharpen";
+// Curve names of Lumetri (Effect::curves).
+inline constexpr std::string_view kCurveMaster = "master";
+inline constexpr std::string_view kCurveRed = "red";
+inline constexpr std::string_view kCurveGreen = "green";
+inline constexpr std::string_view kCurveBlue = "blue";
 // Levels at or below this many dB are silence (-inf).
 inline constexpr double kSilenceDb = -96.0;
 
@@ -69,6 +81,9 @@ struct EffectDef {
     std::vector<StringParameterDef> strings;
     [[nodiscard]] const StringParameterDef* stringParameter(std::string_view key) const noexcept;
     std::vector<ParameterDef> parameters;
+    bool masks = false;  // supports masks (D34)
+    bool curves = false; // has color curves (Lumetri)
+    bool analysis = false; // needs an analysis pass (stabilizer)
 
     [[nodiscard]] const ParameterDef* parameter(std::string_view key) const noexcept;
 };

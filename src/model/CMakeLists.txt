@@ -5,6 +5,8 @@ add_library(loki_model STATIC
     ids.h
     keyframe.h
     keyframe.cpp
+    mask.h
+    mask.cpp
     project.h
     project.cpp
     project_json.h

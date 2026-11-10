@@ -4,6 +4,7 @@
 #include "media/video_frame.h"
 #include "model/project.h"
 #include "model/transitions.h"
+#include "playback/effect_resolve.h"
 #include "model/types.h"
 #include "render/composite.h"
 #include "text/title_renderer.h"
@@ -181,6 +182,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<const render::Lut3D>> m_luts; // null = failed to load
     std::list<std::pair<model::ClipId, std::unique_ptr<SequenceVideoSource>>> m_nested; // LRU
     std::unordered_map<model::ClipId, std::vector<media::VideoFramePtr>> m_reverseRuns;
+    EffectResolver m_effects;
     bool m_transparent = false;
 };
 

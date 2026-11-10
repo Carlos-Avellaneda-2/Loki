@@ -7,6 +7,7 @@
 #include "render/gl_frame_renderer.h"
 
 #include <QOpenGLWindow>
+#include <QPainter>
 #include <QWidget>
 
 #include <QElapsedTimer>
@@ -17,6 +18,17 @@
 namespace loki::ui {
 
 class VideoWindow;
+
+// Drawing and mouse input on top of a composited picture (mask editing, D34). Coordinates are canvas
+// pixels (the sequence frame); `picture` is where the canvas is shown, in widget pixels.
+struct VideoOverlay {
+    std::function<void(QPainter& painter, const QRectF& picture, const QSizeF& canvas)> paint;
+    // Returns true when the event was used. `type` is QEvent::MouseButtonPress / Move / Release /
+    // MouseButtonDblClick.
+    std::function<bool(int type, Qt::MouseButton button, Qt::KeyboardModifiers modifiers, const QPointF& canvas,
+                       double canvasPerWidgetPixel)>
+        mouse;
+};
 
 // Monitor surface: draws the current video frame with OpenGL (letterboxed, black background).
 // For audio-only media it draws the waveform instead.
@@ -51,6 +63,8 @@ public:
     // Scopes (D32): after compositing a new picture, and while `wanted()` is true, the picture is
     // read back and passed to `tap` (at most every `intervalMs`).
     void setFrameTap(std::function<bool()> wanted, std::function<void(const QImage&)> tap, int intervalMs = 100);
+    void setOverlay(VideoOverlay overlay);
+    void updateOverlay();
 
 private:
     VideoWindow* m_window = nullptr; // owned by the container widget
@@ -78,8 +92,15 @@ public:
     [[nodiscard]] const render::CompositePtr& composite() const noexcept { return m_composite; }
     [[nodiscard]] bool rendererReady() const noexcept { return m_ready; }
     void setFrameTap(std::function<bool()> wanted, std::function<void(const QImage&)> tap, int intervalMs);
+    void setOverlay(VideoOverlay overlay);
+    // Widget rectangle where the composite canvas is shown (letterboxed).
+    [[nodiscard]] QRectF pictureRect() const;
 
 protected:
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void initializeGL() override;
     void paintGL() override;
 
@@ -101,6 +122,8 @@ private:
     std::function<bool()> m_tapWanted;
     std::function<void(const QImage&)> m_tap;
     int m_tapInterval = 100;
+    VideoOverlay m_overlay;
+    bool mouseToOverlay(QMouseEvent* event);
     QElapsedTimer m_tapTimer;
 };
 

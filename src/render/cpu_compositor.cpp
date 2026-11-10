@@ -51,6 +51,92 @@ struct FloatImage {
 
 FloatImage compositeFloat(const CompositeFrame& frame, int width, int height, int depth);
 
+PixelContext contextAt(const Layer& layer, float u, float v) {
+    PixelContext ctx;
+    ctx.u = u;
+    ctx.v = v;
+    if (layer.masks.color) {
+        ctx.colorMask = layer.masks.color->sample(u, v);
+    }
+    if (layer.masks.lumetri) {
+        ctx.lumetriMask = layer.masks.lumetri->sample(u, v);
+    }
+    if (layer.masks.lut) {
+        ctx.lutMask = layer.masks.lut->sample(u, v);
+    }
+    return ctx;
+}
+
+// Source picture of a frame layer with the key applied and, when asked, blurred / sharpened
+// (separable, same taps as the GPU prepass). Rows top to bottom at the frame's size.
+struct PreparedSource {
+    FloatImage base;    // key applied
+    FloatImage blurred; // empty when no blur/sharpen
+};
+
+FloatImage blurPass(const FloatImage& in, const std::vector<BlurTap>& taps, bool horizontal) {
+    FloatImage out = in;
+    for (int y = 0; y < in.height; ++y) {
+        for (int x = 0; x < in.width; ++x) {
+            Rgba sum{{0.0f, 0.0f, 0.0f}, 0.0f};
+            for (const auto& t : taps) {
+                const auto& p = horizontal ? in.at(x + t.offset, y) : in.at(x, y + t.offset);
+                for (std::size_t c = 0; c < 3; ++c) {
+                    sum.rgb[c] += p.rgb[c] * t.weight;
+                }
+                sum.alpha += p.alpha * t.weight;
+            }
+            out.pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(in.width) + static_cast<std::size_t>(x)] = sum;
+        }
+    }
+    return out;
+}
+
+PreparedSource prepareSource(const Layer& layer) {
+    PreparedSource s;
+    const auto& f = *layer.frame;
+    s.base.width = f.width;
+    s.base.height = f.height;
+    s.base.pixels.resize(static_cast<std::size_t>(f.width) * static_cast<std::size_t>(f.height));
+    for (int y = 0; y < f.height; ++y) {
+        for (int x = 0; x < f.width; ++x) {
+            const auto sample = sampleFrame(f, x, y);
+            float alpha = sample.alpha;
+            const auto rgb = keyPixel(layer.key, sample.rgb, alpha);
+            s.base.pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(f.width) + static_cast<std::size_t>(x)] = {rgb, alpha};
+        }
+    }
+    if (layer.blur.active()) {
+        const auto taps = blurKernel(layer.blur.kernelSigma());
+        const bool sharpenOnly = !(layer.blur.sigma > 0.0f);
+        s.blurred = s.base;
+        if (layer.blur.horizontal || sharpenOnly) {
+            s.blurred = blurPass(s.blurred, taps, true);
+        }
+        if (layer.blur.vertical || sharpenOnly) {
+            s.blurred = blurPass(s.blurred, taps, false);
+        }
+    }
+    return s;
+}
+
+// Blur / sharpen mix of a prepared texel (the shader's prepared-source path).
+Rgba preparedTexel(const Layer& layer, const PreparedSource& s, int x, int y, float blurMask) {
+    const auto& a = s.base.at(x, y);
+    if (s.blurred.pixels.empty()) {
+        return a;
+    }
+    const auto& b = s.blurred.at(x, y);
+    Rgba out = a;
+    const float mb = layer.blur.sigma > 0.0f ? blurMask : 0.0f;
+    for (std::size_t c = 0; c < 3; ++c) {
+        out.rgb[c] = a.rgb[c] + (b.rgb[c] - a.rgb[c]) * mb + (a.rgb[c] - b.rgb[c]) * layer.blur.sharpen * blurMask;
+        out.rgb[c] = std::clamp(out.rgb[c], 0.0f, 1.0f);
+    }
+    out.alpha = a.alpha + (b.alpha - a.alpha) * mb;
+    return out;
+}
+
 void drawLayer(FloatImage& accum, const CompositeFrame& frame, const Layer& layer, int depth) {
     if (!layer.hasPicture() || layer.transform.opacity <= 0.0) {
         return;
@@ -66,9 +152,12 @@ void drawLayer(FloatImage& accum, const CompositeFrame& frame, const Layer& laye
             for (int x = 0; x < width; ++x) {
                 auto& dst = accum.pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)];
                 const float cx = static_cast<float>((x + 0.5) / width);
-                const float alpha = opacity * dst.alpha * wipeAlpha(layer.wipe, cx);
+                const float cy = static_cast<float>((y + 0.5) / height);
+                const float opacityMask = layer.masks.opacity ? layer.masks.opacity->sample(cx, cy) : 1.0f;
+                const float alpha = opacity * opacityMask * dst.alpha * wipeAlpha(layer.wipe, cx, cy);
                 if (alpha > 0.0f) {
-                    dst = compositeOver(layer.transform.blend, gradePixel(layer.grade, dst.rgb), alpha, dst);
+                    dst = compositeOver(layer.transform.blend, gradePixel(layer.grade, dst.rgb, contextAt(layer, cx, cy)),
+                                        alpha, dst);
                 }
             }
         }
@@ -99,6 +188,9 @@ void drawLayer(FloatImage& accum, const CompositeFrame& frame, const Layer& laye
     }
     const double toFrameX = layer.nested ? nested.width / layer.sourceWidth : layer.frame->width / layer.sourceWidth;
     const double toFrameY = layer.nested ? nested.height / layer.sourceHeight : layer.frame->height / layer.sourceHeight;
+    // Key / blur / sharpen work on the decoded picture first (the GPU's prepass).
+    const bool prepared = !layer.nested && (layer.key.enabled || layer.blur.active());
+    const auto source = prepared ? prepareSource(layer) : PreparedSource{};
     for (int y = 0; y < height; ++y) {
         const double cy = (y + 0.5) * ch / height;
         for (int x = 0; x < width; ++x) {
@@ -112,19 +204,27 @@ void drawLayer(FloatImage& accum, const CompositeFrame& frame, const Layer& laye
             }
             const int fx = static_cast<int>(lx * toFrameX);
             const int fy = static_cast<int>(ly * toFrameY);
+            const auto u = static_cast<float>(lx / layer.sourceWidth);
+            const auto v = static_cast<float>(ly / layer.sourceHeight);
             SampledColor sample;
             if (layer.nested) {
                 const auto& p = nested.at(fx, fy);
                 sample = {p.rgb, p.alpha};
+            } else if (prepared) {
+                const float blurMask = layer.masks.blur ? layer.masks.blur->sample(u, v) : 1.0f;
+                const auto p = preparedTexel(layer, source, fx, fy, blurMask);
+                sample = {p.rgb, p.alpha};
             } else {
                 sample = sampleFrame(*layer.frame, fx, fy);
             }
-            const float alpha = opacity * sample.alpha * wipeAlpha(layer.wipe, static_cast<float>(cx / cw));
+            const float opacityMask = layer.masks.opacity ? layer.masks.opacity->sample(u, v) : 1.0f;
+            const float alpha = opacity * opacityMask * sample.alpha *
+                                wipeAlpha(layer.wipe, static_cast<float>(cx / cw), static_cast<float>(cy / ch));
             if (alpha <= 0.0f) {
                 continue;
             }
             auto& dst = accum.pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)];
-            dst = compositeOver(layer.transform.blend, gradePixel(layer.grade, sample.rgb), alpha, dst);
+            dst = compositeOver(layer.transform.blend, gradePixel(layer.grade, sample.rgb, contextAt(layer, u, v)), alpha, dst);
         }
     }
 }

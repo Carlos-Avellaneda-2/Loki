@@ -1,6 +1,7 @@
 #include "commands/effect_commands.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace loki::commands {
@@ -97,6 +98,108 @@ std::unique_ptr<Command> setEffectString(const Project& project, ClipId clip, st
     return std::make_unique<EditClipCommand>(clip, "Change " + sdef->label,
                                              [t, k = std::string(key), value = std::move(value)](Clip& c) {
                                                  ensureEffect(c, t).strings[k] = value;
+                                             });
+}
+
+std::unique_ptr<Command> setEffectCurve(const Project& project, ClipId clip, std::string_view effectType,
+                                        std::string_view curve, std::vector<CurvePoint> points, GestureId gesture) {
+    const auto t = target(project, clip, effectType, {});
+    if (!findEffectDef(effectType)->curves) {
+        throw CommandError(findEffectDef(effectType)->label + " has no curves");
+    }
+    if (auto problem = curveProblem(points); !problem.empty()) {
+        throw CommandError(problem);
+    }
+    return std::make_unique<EditClipCommand>(
+        clip, "Change Curve",
+        [t, name = std::string(curve), points = std::move(points)](Clip& c) {
+            auto& effect = ensureEffect(c, t);
+            if (points == identityCurve()) {
+                effect.curves.erase(name);
+            } else {
+                effect.curves[name] = points;
+            }
+        },
+        gesture == 0 ? std::string() : std::to_string(gesture) + ":curve:" + t.type + ":" + std::string(curve));
+}
+
+namespace {
+
+Target maskTarget(const Project& project, ClipId clip, std::string_view effectType) {
+    auto t = target(project, clip, effectType, {});
+    if (!findEffectDef(effectType)->masks) {
+        throw CommandError(findEffectDef(effectType)->label + " does not support masks");
+    }
+    return t;
+}
+
+} // namespace
+
+std::unique_ptr<Command> addEffectMask(const Project& project, ClipId clip, std::string_view effectType, Mask mask,
+                                       MaskId* added) {
+    const auto t = maskTarget(project, clip, effectType);
+    if (mask.id.isNull()) {
+        mask.id = MaskId::generate();
+    }
+    if (auto problem = maskProblem(mask); !problem.empty()) {
+        throw CommandError(problem);
+    }
+    if (added != nullptr) {
+        *added = mask.id;
+    }
+    return std::make_unique<EditClipCommand>(clip, "Add Mask", [t, mask = std::move(mask)](Clip& c) {
+        auto& effect = ensureEffect(c, t);
+        auto m = mask;
+        if (m.name.empty()) {
+            m.name = "Mask (" + std::to_string(effect.masks.size() + 1) + ")";
+        }
+        effect.masks.push_back(std::move(m));
+    });
+}
+
+std::unique_ptr<Command> updateEffectMask(const Project& project, ClipId clip, std::string_view effectType, Mask mask,
+                                          GestureId gesture) {
+    const auto t = maskTarget(project, clip, effectType);
+    const auto* effect = findEffectByType(*project.findClip(clip).clip, effectType);
+    if (effect == nullptr || effect->findMask(mask.id) == nullptr) {
+        throw CommandError("Mask does not exist");
+    }
+    if (auto problem = maskProblem(mask); !problem.empty()) {
+        throw CommandError(problem);
+    }
+    const auto id = mask.id.toString();
+    return std::make_unique<EditClipCommand>(
+        clip, "Edit Mask",
+        [t, mask = std::move(mask)](Clip& c) {
+            for (auto& m : ensureEffect(c, t).masks) {
+                if (m.id == mask.id) {
+                    m = mask;
+                }
+            }
+        },
+        gesture == 0 ? std::string() : std::to_string(gesture) + ":mask:" + id);
+}
+
+std::unique_ptr<Command> removeEffectMask(const Project& project, ClipId clip, std::string_view effectType, MaskId mask) {
+    const auto t = maskTarget(project, clip, effectType);
+    const auto* effect = findEffectByType(*project.findClip(clip).clip, effectType);
+    if (effect == nullptr || effect->findMask(mask) == nullptr) {
+        throw CommandError("Mask does not exist");
+    }
+    return std::make_unique<EditClipCommand>(clip, "Delete Mask", [t, mask](Clip& c) {
+        std::erase_if(ensureEffect(c, t).masks, [&](const Mask& m) { return m.id == mask; });
+    });
+}
+
+std::unique_ptr<Command> setEffectSamples(const Project& project, ClipId clip, std::string_view effectType,
+                                          std::vector<double> samples) {
+    const auto t = target(project, clip, effectType, {});
+    if (!std::all_of(samples.begin(), samples.end(), [](double v) { return std::isfinite(v); })) {
+        throw CommandError("Analysis data is not finite");
+    }
+    return std::make_unique<EditClipCommand>(clip, samples.empty() ? "Clear Analysis" : "Analyze",
+                                             [t, samples = std::move(samples)](Clip& c) {
+                                                 ensureEffect(c, t).samples = samples;
                                              });
 }
 

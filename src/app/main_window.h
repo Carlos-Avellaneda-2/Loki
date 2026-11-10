@@ -28,6 +28,7 @@ class ShortcutManager;
 class ProgramMonitorPanel;
 class EffectControlsPanel;
 class MarkersPanel;
+class MaskOverlay;
 class ScopesPanel;
 namespace timeline {
 class TimelinePanel;
@@ -83,6 +84,7 @@ public:
     [[nodiscard]] ui::EffectsPanel* effectsPanel() const noexcept { return m_effects; }
     [[nodiscard]] ui::MarkersPanel* markersPanel() const noexcept { return m_markers; }
     [[nodiscard]] ui::ScopesPanel* scopesPanel() const noexcept { return m_scopes; }
+    [[nodiscard]] ui::MaskOverlay* maskOverlay() const noexcept { return m_maskOverlay; }
     // Sequence > Add Adjustment Layer (D31): at the playhead, above the targeted video track.
     void newAdjustmentLayer();
     // Sequence > Delete Sequence: also removes nested-sequence items that show it (D30).
@@ -150,6 +152,7 @@ private:
     ui::timeline::TimelinePanel* m_timeline = nullptr;  // owned by its dock widget
     ui::MarkersPanel* m_markers = nullptr;              // owned by its dock widget
     ui::ScopesPanel* m_scopes = nullptr;                // owned by its dock widget
+    ui::MaskOverlay* m_maskOverlay = nullptr;           // owned by this window (Qt parent)
     ui::AudioMetersPanel* m_audioMeters = nullptr;      // owned by its dock widget
     ui::AudioMixerPanel* m_audioMixer = nullptr;        // owned by its dock widget
     ui::EffectsPanel* m_effects = nullptr;              // owned by its dock widget

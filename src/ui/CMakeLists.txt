@@ -27,7 +27,11 @@ add_library(loki_ui STATIC
     project_item_model.cpp
     project_panel.h
     project_panel.cpp
+    curve_editor.h
+    curve_editor.cpp
     marker_dialog.h
+    mask_overlay.h
+    mask_overlay.cpp
     markers_panel.h
     markers_panel.cpp
     marker_dialog.cpp
@@ -55,5 +59,5 @@ add_library(loki_ui STATIC
 add_library(loki::ui ALIAS loki_ui)
 
 target_include_directories(loki_ui PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(loki_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::OpenGLWidgets loki::commands loki::export loki::media loki::playback loki::render loki::model loki::util)
+target_link_libraries(loki_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::OpenGLWidgets loki::analysis loki::commands loki::export loki::media loki::playback loki::render loki::model loki::util)
 loki_set_warnings(loki_ui)

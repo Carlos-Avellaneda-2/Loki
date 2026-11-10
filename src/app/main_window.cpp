@@ -18,6 +18,7 @@
 #include "commands/marker_commands.h"
 #include "commands/project_commands.h"
 #include "ui/markers_panel.h"
+#include "ui/mask_overlay.h"
 #include "ui/scopes_panel.h"
 #include "ui/video_view.h"
 #include "ui/auto_saver.h"
@@ -160,6 +161,9 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
             }
         }
         m_effectControls->setClip(single ? pick : model::ClipId());
+        if (m_maskOverlay != nullptr) {
+            m_maskOverlay->select({}, {}, {});
+        }
         if (single && pick) {
             dockWidget(ui::PanelId::EffectControls)->raise();
         }
@@ -185,6 +189,18 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
     connect(m_timeline, &ui::timeline::TimelinePanel::sequenceRequested, this, &MainWindow::setActiveSequence);
     connect(m_timeline->view(), &ui::timeline::TimelineView::openSequenceRequested, this, &MainWindow::setActiveSequence);
     connect(m_markers, &ui::MarkersPanel::seekRequested, this, [this](Rational t) { m_programMonitor->engine().seek(t); });
+    // Masks (D34): edited on the Program Monitor.
+    m_maskOverlay = new ui::MaskOverlay(*m_controller, *m_programMonitor->videoView(),
+                                        [this] { return m_programMonitor->engine().position(); }, this);
+    connect(m_effectControls, &ui::EffectControlsPanel::maskSelected, this,
+            [this](model::ClipId clip, const QString& type, model::MaskId mask) {
+                m_maskOverlay->select(clip, type.toStdString(), mask);
+                dockWidget(ui::PanelId::ProgramMonitor)->raise();
+            });
+    connect(m_effectControls, &ui::EffectControlsPanel::penRequested, this, [this](model::ClipId clip, const QString& type) {
+        m_maskOverlay->startPen(clip, type.toStdString());
+        statusBar()->showMessage(tr("Pen: click points on the Program Monitor; click the first point to close the mask"), 8000);
+    });
     m_markers->setEditor([this](model::MarkerId id) { m_timeline->view()->editMarker(id); });
     // Scopes (D32): the Program picture, read back only while the Scopes panel is shown.
     m_programMonitor->videoView()->setFrameTap(
@@ -427,6 +443,9 @@ void MainWindow::placeGenerated(std::string_view generator, const std::string& n
 
 MainWindow::~MainWindow() {
     m_programMonitor->videoView()->setFrameTap({}, {}); // the scopes go away with the docks
+    m_programMonitor->videoView()->setOverlay({});      // the overlay draws into the monitor
+    delete m_maskOverlay; // NOLINT(cppcoreguidelines-owning-memory): Qt child, deleted before the monitor
+    m_maskOverlay = nullptr;
     // Panels reference the controller and media services: destroy them (with the dock manager)
     // before Qt deletes the remaining children in creation order.
     delete m_dockManager; // NOLINT(cppcoreguidelines-owning-memory): Qt child, deleted early on purpose

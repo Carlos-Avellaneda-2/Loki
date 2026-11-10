@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string_view>
+#include <vector>
 
 namespace loki::commands {
 
@@ -54,6 +55,30 @@ namespace loki::commands {
 // one of that type or if it does not fit the clip (video effect on audio, ...).
 [[nodiscard]] std::unique_ptr<Command> applyEffect(const model::Project& project, model::ClipId clip,
                                                    std::string_view effectType);
+
+// --- Phase 14 (format v4) -----------------------------------------------------------------------
+
+// Lumetri curves (D33): replaces one named curve ("master", "red", "green", "blue"). Edits with the
+// same non-zero gesture merge (dragging a point).
+[[nodiscard]] std::unique_ptr<Command> setEffectCurve(const model::Project& project, model::ClipId clip,
+                                                      std::string_view effectType, std::string_view curve,
+                                                      std::vector<model::CurvePoint> points, GestureId gesture = 0);
+
+// Masks (D34) of an effect that supports them (created with its defaults if needed). `mask.id` may
+// be null on add (a new id is generated); the id of the added mask is returned in `added`.
+[[nodiscard]] std::unique_ptr<Command> addEffectMask(const model::Project& project, model::ClipId clip,
+                                                     std::string_view effectType, model::Mask mask,
+                                                     model::MaskId* added = nullptr);
+// Replaces the mask with the same id (shape, feather, opacity, expansion, mode, path keys).
+[[nodiscard]] std::unique_ptr<Command> updateEffectMask(const model::Project& project, model::ClipId clip,
+                                                        std::string_view effectType, model::Mask mask,
+                                                        GestureId gesture = 0);
+[[nodiscard]] std::unique_ptr<Command> removeEffectMask(const model::Project& project, model::ClipId clip,
+                                                        std::string_view effectType, model::MaskId mask);
+
+// Analysis results (stabilizer, D36), replacing the effect's samples.
+[[nodiscard]] std::unique_ptr<Command> setEffectSamples(const model::Project& project, model::ClipId clip,
+                                                        std::string_view effectType, std::vector<double> samples);
 
 // Media and sequence settings a clip's defaults depend on.
 struct ClipContext {

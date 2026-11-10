@@ -22,4 +22,9 @@ if (-not $env:VCPKG_ROOT) { throw "VCPKG_ROOT is not set." }
 if (-not $env:LOKI_QT_DIR) { throw "LOKI_QT_DIR is not set (e.g. F:\dev\Qt\6.8.3\msvc2022_64)." }
 
 $env:PATH = "$env:LOKI_QT_DIR\bin;$env:PATH"
+# UTF-8 console: a localized MSVC prints its /showIncludes prefix ("Nota: inclusión del archivo:") in the
+# console code page. CMake detected it as UTF-8, so with any other code page Ninja recorded no header
+# dependencies and edited headers left stale objects behind.
+chcp 65001 > $null
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Write-Host "Loki dev environment ready: MSVC $env:VCToolsVersion, Qt $env:LOKI_QT_DIR, vcpkg $env:VCPKG_ROOT"

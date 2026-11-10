@@ -6,6 +6,8 @@ add_library(loki_playback STATIC
     playback_engine.cpp
     performance.h
     performance.cpp
+    effect_resolve.h
+    effect_resolve.cpp
     sources.h
     sources.cpp
 )
