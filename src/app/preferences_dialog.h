@@ -1,8 +1,11 @@
 #pragma once
 
+#include "playback/performance.h"
+
 #include <QDialog>
 
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QSpinBox;
@@ -22,6 +25,10 @@ public:
     // `autoSaver` may be null (its settings are then only stored).
     explicit PreferencesDialog(ui::MediaServices& services, ui::AutoSaver* autoSaver = nullptr, QWidget* parent = nullptr);
 
+    // Stored playback performance mode ("performance/mode"; used at start-up).
+    [[nodiscard]] static playback::PerformanceMode performanceMode();
+    static void setPerformanceMode(playback::PerformanceMode mode);
+
 private:
     void accept() override;
     void refreshUsage();
@@ -33,6 +40,7 @@ private:
     QCheckBox* m_autosave = nullptr;
     QSpinBox* m_interval = nullptr;
     QSpinBox* m_keep = nullptr;
+    QComboBox* m_performance = nullptr;
 };
 
 } // namespace loki::app

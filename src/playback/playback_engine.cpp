@@ -428,7 +428,8 @@ void PlaybackEngine::doOpenSequence(std::shared_ptr<const SequenceSnapshot> snap
     if (!m_snapshot) {
         return;
     }
-    m_video = std::make_unique<SequenceVideoSource>(m_snapshot, m_options.allowHardware, m_maxWidth, m_maxHeight);
+    m_video = std::make_unique<SequenceVideoSource>(m_snapshot, m_options.allowHardware, m_maxWidth, m_maxHeight,
+                                                    m_options.maxVideoDecoders, m_options.parallelPlaybackDecode);
     if (m_device) {
         m_audio = std::make_unique<SequenceAudioSource>(m_snapshot, m_device->sampleRate(), m_device->channels());
     }
@@ -479,7 +480,6 @@ void PlaybackEngine::applyTransport(int rate, const Rational& position) {
 }
 
 namespace {
-constexpr std::size_t kCompositeCacheEntries = 48;
 } // namespace
 
 void PlaybackEngine::cachePut(const TimedFrame& f) {
@@ -490,7 +490,7 @@ void PlaybackEngine::cachePut(const TimedFrame& f) {
         const auto index = frameIndexOf(f.time);
         std::erase_if(m_compositeCache, [index](const auto& e) { return e.first == index; });
         m_compositeCache.emplace_front(index, f);
-        if (m_compositeCache.size() > kCompositeCacheEntries) {
+        if (m_compositeCache.size() > std::max<std::size_t>(1, m_options.compositeCacheEntries)) {
             m_compositeCache.pop_back();
         }
         return;

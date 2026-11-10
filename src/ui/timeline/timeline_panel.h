@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+class QComboBox;
 class QLabel;
 class QScrollBar;
 class QSlider;
@@ -32,14 +33,22 @@ public:
     // Creates the timeline's keyboard actions (Premiere defaults, user-configurable).
     void registerShortcuts(ShortcutManager& shortcuts);
 
+    // Sequence switcher (every sequence of the project; the active one selected).
+    [[nodiscard]] QComboBox* sequenceSelector() const noexcept { return m_sequences; }
+
 signals:
     void statusMessage(const QString& text);
+    void sequenceRequested(loki::model::SequenceId id);
 
 private:
     void syncScrollBars();
 
     TimelineView* m_view = nullptr;
-    QLabel* m_title = nullptr;
+    void refreshSequences();
+
+    ProjectController& m_controller;
+    QComboBox* m_sequences = nullptr;
+    bool m_refreshing = false;
     std::vector<std::pair<Tool, QToolButton*>> m_toolButtons;
     QToolButton* m_snap = nullptr;
     QSlider* m_zoom = nullptr;

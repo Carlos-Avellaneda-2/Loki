@@ -15,14 +15,27 @@ C++20 · Qt 6 · FFmpeg (LGPL) · OpenGL.
 
 ## 1. Instalar y abrir
 
-1. Ejecuta `Loki-<versión>-setup.exe`. Por defecto se instala solo para tu usuario y no pide permisos de
-   administrador.
-2. Abre Loki desde el menú Inicio. Si marcaste la asociación de archivos, también puedes hacer doble clic en un
-   archivo `.loki`.
-3. Desde la línea de comandos, `loki.exe proyecto.loki` abre ese proyecto y `loki.exe video.mp4` lo importa.
+1. Ejecuta `Loki-<versión>-setup.exe` (se genera en `build\installer\`). Se instala solo para tu usuario y no pide
+   permisos de administrador.
+2. Al terminar hay un acceso directo **Loki** en el escritorio y en el menú Inicio. Haz doble clic y se abre.
+3. Los archivos `.loki` se abren con doble clic.
+4. Desde la línea de comandos, `loki.exe proyecto.loki` abre ese proyecto y `loki.exe video.mp4` lo importa.
 
-**Requisitos:** Windows 10/11 de 64 bits y una GPU con OpenGL 3.3. Con dos núcleos alcanza para 1080p30 con 2
-pistas de video y 2 de audio. Para más pistas, usa la calidad 1/2 o proxies.
+**Instalar o actualizar con un solo comando** (desde la carpeta del código): compila, genera el instalador e instala
+en `F:\Programas\Loki` con el acceso directo del escritorio. Cierra Loki antes.
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\install-local.ps1
+```
+
+Para otra carpeta: `-Dir D:\Apps\Loki`. Para desinstalar: Configuración de Windows > Aplicaciones > Loki.
+
+**Requisitos:**
+- Windows 10/11 de 64 bits y una GPU con OpenGL 3.3.
+- Con dos núcleos alcanza para 1080p30 con 2 pistas de video y 2 de audio. Para más pistas, usa la calidad 1/2 o
+  proxies.
+- Un equipo con 8 hilos o más y 12 GB de RAM entra solo en el modo de rendimiento **High** (sección 12): cachés más
+  grandes, más capas de video y decodificación en paralelo.
 
 ## 2. La ventana
 
@@ -61,6 +74,30 @@ pestaña del panel). Window muestra u oculta cada panel.
 - En el panel Project, clic derecho > Rename / Delete. Con el botón de carpeta creas bins. Los botones de lista y
   miniaturas cambian la vista.
 - El panel Project muestra resolución, fps, duración y códec de cada medio.
+
+### Secuencias y pistas
+
+Un proyecto puede tener varias secuencias: por ejemplo, la versión 4K, la vertical para redes y el tráiler.
+
+| Acción | Menú | Atajo |
+|---|---|---|
+| Nueva secuencia | Sequence > New Sequence… | Ctrl+N |
+| Cambiar resolución, fps o nombre | Sequence > Sequence Settings… | |
+| Agregar varias pistas de video y audio | Sequence > Add Tracks… | |
+| Borrar la secuencia activa | Sequence > Delete Sequence | |
+
+- **Presets de secuencia:**
+  - HD 1080p (23.976 a 60 fps).
+  - QHD 1440p (30 y 60).
+  - 4K UHD (23.976 a 60) y DCI 4K.
+  - 720p.
+  - Vertical 1080×1920 (reels, stories).
+  - Cuadrado 1080×1080.
+  - **Custom:** cualquier tamaño hasta 8192 px y 120 fps.
+- Al crear una secuencia eliges cuántas pistas de video (hasta 99) y de audio (hasta 99) trae. Después puedes
+  agregar más con Add Tracks… o con clic derecho en la cabecera del timeline.
+- El menú desplegable arriba a la izquierda del timeline cambia la secuencia que ves en el timeline y en el monitor
+  de programa.
 
 ### Autoguardado y recuperación
 
@@ -248,9 +285,9 @@ La exportación **siempre** usa los originales. El sonido sale siempre del origi
      | Preset | Resultado |
      |---|---|
      | H.264 - Match Sequence | Tamaño y fps de la secuencia, .mp4 |
-     | H.264 - 1080p30 / 1080p60 / 4K UHD 30 | Esa resolución y fps, .mp4 |
+     | H.264 - 1080p30 / 1080p60 / 1440p60 / 4K UHD 30 / 4K UHD 60 | Esa resolución y fps, .mp4 |
      | H.264 - 720p | .mp4 liviano |
-     | HEVC (hardware) - Match Sequence | Solo si tu GPU tiene codificador HEVC |
+     | HEVC (hardware) - Match Sequence / 4K UHD 30 / 4K UHD 60 | Solo si tu GPU tiene codificador HEVC (NVIDIA, Intel o AMD recientes) |
      | ProRes 422 HQ (.mov) | Archivo intermedio de alta calidad, con audio PCM |
      | WAV - Audio Only | Solo la mezcla de audio |
 
@@ -269,6 +306,13 @@ Edit > Preferences…:
 - **Media Cache folder**: dónde se guardan miniaturas, formas de onda, proxies y autoguardados. **Clean Cache** la
   vacía.
 - **Auto Save**: activar o desactivar, cada cuántos minutos y cuántas versiones conservar.
+- **Playback performance:** aplica al reiniciar Loki. La pantalla muestra cuántos hilos y cuánta RAM detectó.
+
+  | Modo | Para | Qué cambia |
+  |---|---|---|
+  | **Auto** | Por defecto | Elige High con 8 hilos o más y 12 GB de RAM; si no, Standard |
+  | **Standard** | Portátiles de 2 a 4 núcleos | Caché de 384 MB, 8 capas de video abiertas, decodifica capa por capa |
+  | **High** | Equipos potentes | Caché de 1/8 de la RAM (hasta 4 GB), 32 capas, más fotogramas por adelantado, varias capas a la vez en varios núcleos |
 
 ## 13. Problemas frecuentes
 

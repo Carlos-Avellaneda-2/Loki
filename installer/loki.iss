@@ -38,7 +38,7 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "associate"; Description: "Abrir archivos .loki con Loki"; GroupDescription: "Asociaciones:"
 
 [Files]

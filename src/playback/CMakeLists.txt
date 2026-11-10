@@ -4,6 +4,8 @@ add_library(loki_playback STATIC
     playback_clock.cpp
     playback_engine.h
     playback_engine.cpp
+    performance.h
+    performance.cpp
     sources.h
     sources.cpp
 )

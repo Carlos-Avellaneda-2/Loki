@@ -4,6 +4,7 @@
 #include "ui/project_controller.h"
 #include "ui/shortcut_manager.h"
 
+#include <QComboBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -31,10 +32,19 @@ double ppsFromSlider(int value) {
 } // namespace
 
 TimelinePanel::TimelinePanel(ProjectController& controller, MediaServices& services, QWidget* parent)
-    : QWidget(parent) {
+    : QWidget(parent), m_controller(controller) {
     m_view = new TimelineView(controller, services, this);
-    m_title = new QLabel(this);
-    m_title->setContentsMargins(6, 0, 6, 0);
+    m_sequences = new QComboBox(this);
+    m_sequences->setMinimumContentsLength(14);
+    m_sequences->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_sequences->setToolTip(tr("Sequence shown in the Timeline and Program Monitor"));
+    connect(m_sequences, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (!m_refreshing && index >= 0) {
+            if (const auto uuid = Uuid::parse(m_sequences->itemData(index).toString().toStdString())) {
+                emit sequenceRequested(model::SequenceId(*uuid));
+            }
+        }
+    });
 
     const auto toolButton = [this](const QString& text, const QString& tip) {
         auto* b = new QToolButton(this);
@@ -68,7 +78,7 @@ TimelinePanel::TimelinePanel(ProjectController& controller, MediaServices& servi
 
     auto* bar = new QHBoxLayout();
     bar->setContentsMargins(4, 2, 4, 2);
-    bar->addWidget(m_title);
+    bar->addWidget(m_sequences);
     bar->addStretch();
     for (const auto& [tool, button] : m_toolButtons) {
         bar->addWidget(button);
@@ -127,10 +137,9 @@ TimelinePanel::TimelinePanel(ProjectController& controller, MediaServices& servi
     });
     connect(m_view, &TimelineView::statusMessage, this, &TimelinePanel::statusMessage);
     connect(&controller, &ProjectController::projectChanged, this, [this](const model::ChangeEvent& e) {
-        if (e.kind == model::ChangeKind::SequenceChanged && e.id == m_view->sequenceId().uuid()) {
-            if (const auto* seq = m_view->sequence()) {
-                m_title->setText(QString::fromStdString(seq->name));
-            }
+        if (e.kind == model::ChangeKind::SequenceChanged || e.kind == model::ChangeKind::SequenceAdded ||
+            e.kind == model::ChangeKind::SequenceRemoved) {
+            refreshSequences();
         }
         syncScrollBars();
     });
@@ -146,9 +155,18 @@ TimelinePanel::TimelinePanel(ProjectController& controller, MediaServices& servi
 
 void TimelinePanel::setSequence(model::SequenceId id) {
     m_view->setSequence(id);
-    const auto* seq = m_view->sequence();
-    m_title->setText(seq != nullptr ? QString::fromStdString(seq->name) : tr("(no sequence)"));
+    refreshSequences();
     syncScrollBars();
+}
+
+void TimelinePanel::refreshSequences() {
+    m_refreshing = true;
+    m_sequences->clear();
+    for (const auto& seq : m_controller.project().sequences()) {
+        m_sequences->addItem(QString::fromStdString(seq.name), QString::fromStdString(seq.id.toString()));
+    }
+    m_sequences->setCurrentIndex(m_sequences->findData(QString::fromStdString(m_view->sequenceId().toString())));
+    m_refreshing = false;
 }
 
 void TimelinePanel::setTransport(Transport transport) {

@@ -89,6 +89,7 @@ loki_add_test_executable(loki_media_tests
 loki_add_test_executable(loki_playback_tests
     SOURCES
         playback/mixer_source_test.cpp
+        playback/performance_test.cpp
         playback/playback_test.cpp
         playback/sequence_source_test.cpp
         playback/transition_source_test.cpp
@@ -100,6 +101,7 @@ loki_add_test_executable(loki_app_tests
         ui/audio_panels_test.cpp
         ui/export_dialog_test.cpp
         ui/robustness_test.cpp
+        ui/sequences_test.cpp
         app/theme_test.cpp
         ui/project_controller_test.cpp
         ui/project_panel_test.cpp

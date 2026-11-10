@@ -15,7 +15,6 @@ namespace loki::playback {
 
 namespace {
 
-constexpr std::size_t kMaxOpenVideoDecoders = 8;
 constexpr int kReverseRun = 8;
 
 std::optional<TimedFrame> timed(const media::VideoFramePtr& f) {
@@ -89,9 +88,10 @@ std::size_t FileAudioSource::read(float* out, std::size_t frames) {
 // --- SequenceVideoSource -----------------------------------------------------------------------
 
 SequenceVideoSource::SequenceVideoSource(std::shared_ptr<const SequenceSnapshot> snapshot, bool allowHardware,
-                                         int maxWidth, int maxHeight)
+                                         int maxWidth, int maxHeight, std::size_t maxDecoders, bool parallelPlayback)
     : m_snapshot(std::move(snapshot)), m_allowHardware(allowHardware), m_maxWidth(maxWidth), m_maxHeight(maxHeight),
-      m_frameDuration(m_snapshot->sequence.settings.frameRate.reciprocal()) {}
+      m_frameDuration(m_snapshot->sequence.settings.frameRate.reciprocal()),
+      m_maxDecoders(std::max<std::size_t>(1, maxDecoders)), m_parallelPlayback(parallelPlayback) {}
 
 SequenceVideoSource::~SequenceVideoSource() = default;
 
@@ -127,7 +127,7 @@ media::VideoDecoder* SequenceVideoSource::decoderFor(const model::Clip& clip, co
         m_offline.insert(media.id);
         return nullptr;
     }
-    if (m_decoders.size() > kMaxOpenVideoDecoders) {
+    if (m_decoders.size() > m_maxDecoders) {
         m_decoders.pop_back();
     }
     return m_decoders.front().second.get();
@@ -216,7 +216,7 @@ void SequenceVideoSource::prefetch(const Rational& t) {
         (void)work.front().first->frameAt(work.front().second, true); // single layer: scrub jump only
         return;
     }
-    if (work.empty() || work.size() > kMaxOpenVideoDecoders) {
+    if (work.empty() || work.size() > m_maxDecoders) {
         return; // nothing to do (or the decoder LRU could evict one we hold)
     }
     // Each decoder belongs to one clip, so they can run concurrently; the first stays on this thread.
@@ -362,7 +362,7 @@ void SequenceVideoSource::seek(const Rational& t) {
 }
 
 std::optional<TimedFrame> SequenceVideoSource::nextFrame() {
-    auto f = compose(m_next, false);
+    auto f = compose(m_next, m_parallelPlayback);
     m_next += m_frameDuration;
     return f;
 }

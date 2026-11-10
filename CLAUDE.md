@@ -47,6 +47,8 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
   solo de mezcla no recargan el motor (`sameExceptAudioMix`): si se agrega un campo de mezcla, incluirlo ahí.
 - Render: toda fórmula nueva del shader (`GlCompositor`) debe existir igual en `render_core`
   (`grading`, `cpu_compositor`) y tener test GPU vs CPU en `loki_gl_tests`.
+- Rendimiento: nada fijo para la máquina del usuario; los límites salen de `playback::PerformanceProfile`
+  (`main.cpp` lo aplica al arrancar; Preferences > Performance). Standard = valores de la máquina del usuario.
 - Atajos: nunca `QShortcut`/`keyPressEvent` sueltos; registrar con `ShortcutManager::create/bind` (id estable
   `<panel>.<acción>`, contexto de panel o "Application", tecla por defecto Premiere). Sin conflictos por contexto
   (hay test que lo verifica). Los tests Qt usan settings aislados (org "LokiTests").
@@ -99,6 +101,7 @@ reciben PATH de Qt y `QT_QPA_PLATFORM=offscreen` por propiedades de ctest.
 - [x] 9. Transiciones, color, títulos — formato v2 (transiciones en pista, medios generados, parámetros texto), disolución/fundido a negro/barrido + crossfade audio, Color/LUT .cube en shader, títulos QtGui, compositor CPU de referencia, panel Efectos, 331 tests
 - [x] 10. Exportación — módulo export (ExportJob, MediaWriter FFmpeg, renderer GPU offscreen + respaldo CPU), encoders LGPL con autodetección (QSV en la máquina del usuario), presets H.264/HEVC/ProRes/WAV, diálogo con progreso/cancelar
 - [x] 11. Robustez y rendimiento — proxies 720p (D24), autoguardado + recuperación con QLockFile (D25), workspaces Edición/Color/Audio + de usuario (D26), StallDetector, decodificación paralela en saltos, loki_bench + docs/PERFORMANCE.md, instalador Inno Setup (D27), presets 1080p30/1080p60/4K30, 344 tests
+- [x] 12. Escalado a equipos potentes — perfil de rendimiento Auto/Standard/High por hilos+RAM (`playback/performance`: caché, look-ahead, decodificadores, decodificación paralela en reproducción), varias secuencias (New Sequence con presets 4K/1440p/vertical/120 fps, Sequence Settings, selector en el timeline), Add Tracks (hasta 99+99), presets 4K60/1440p60/HEVC 4K, `scripts\install-local.ps1`
 
 - D1–D4 (Fase 2): modelo C++ puro + adaptador Qt; solo Commands mutan; formato .loki JSON (tiempos [num,den],
   UUID, ruta abs+rel); sin solapes en pista.

@@ -130,8 +130,10 @@ struct SequenceSnapshot {
 // does not make one decoder seek back and forth.
 class SequenceVideoSource final : public VideoSource {
 public:
+    // maxDecoders: video layers kept open at once; parallelPlayback: also decode layers in parallel
+    // during sequential playback (machines with spare cores).
     SequenceVideoSource(std::shared_ptr<const SequenceSnapshot> snapshot, bool allowHardware, int maxWidth,
-                        int maxHeight);
+                        int maxHeight, std::size_t maxDecoders = 8, bool parallelPlayback = false);
     ~SequenceVideoSource() override;
     std::optional<TimedFrame> frameAt(const Rational& t) override;
     void seek(const Rational& t) override;
@@ -159,6 +161,8 @@ private:
     Rational m_frameDuration;
     Rational m_next;
     std::list<std::pair<model::ClipId, std::unique_ptr<media::VideoDecoder>>> m_decoders; // LRU
+    std::size_t m_maxDecoders = 8;
+    bool m_parallelPlayback = false;
     std::unordered_set<model::MediaId> m_offline;
     struct CachedTitle {
         text::TitleSpec spec;

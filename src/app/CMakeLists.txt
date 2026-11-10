@@ -5,6 +5,8 @@ add_library(loki_app STATIC
     main_window.h
     main_window.cpp
     preferences_dialog.h
+    sequence_dialog.h
+    sequence_dialog.cpp
     preferences_dialog.cpp
     shortcuts_dialog.h
     shortcuts_dialog.cpp

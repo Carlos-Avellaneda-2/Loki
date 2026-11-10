@@ -110,6 +110,18 @@ private:
     void showAllPanels();
     QWidget* createPanelWidget(ui::PanelId id);
     void activateFirstSequence();
+public:
+    // Shows `id` in the Timeline, Program Monitor and mixer.
+    void setActiveSequence(model::SequenceId id);
+    // Sequence menu (public for tests): dialogs, then undoable commands.
+    void newSequence();
+    void sequenceSettings();
+    void addTracks();
+    // Creates a sequence and makes it active (no dialog).
+    bool createSequence(const std::string& name, const model::SequenceSettings& settings, int videoTracks,
+                        int audioTracks);
+    bool addTracks(int video, int audio);
+private:
     void updateTitle();
     void openProject();
     bool save();

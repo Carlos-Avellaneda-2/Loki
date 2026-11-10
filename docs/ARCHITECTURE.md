@@ -381,6 +381,25 @@ sequenceDiagram
   - Controles de Efectos edita la duración y la alineación de la transición, el texto del título y el LUT.
   - Archivo > Nuevo título (Ctrl+T) crea el título en la primera pista libre por encima de la pista destino.
 
+## 7h. Escalado a equipos potentes
+
+- `playback::detectHardware()` lee los hilos lógicos y la RAM física.
+- `performanceProfile(mode, hw)` decide los límites, con el modo guardado en QSettings (`performance/mode`) y
+  aplicado al arrancar:
+  - Caché de fotogramas, look-ahead y decodificadores abiertos por `SequenceVideoSource`.
+  - Caché de composiciones y decodificación paralela de capas durante la reproducción.
+  - **Standard** son los valores medidos en el portátil de 2 núcleos.
+  - **High** se elige con 8 hilos o más y 12 GB de RAM: 1/8 de la RAM de caché (hasta 4 GB), 32 decodificadores,
+    look-ahead de 16 y capas en paralelo.
+- Secuencias:
+  - `app::SequenceDialog` crea secuencias con presets (HD, QHD, 4K UHD/DCI, 720p, vertical, cuadrado, custom
+    hasta 8192 px) y edita los ajustes, con `AddSequenceCommand`, `SetSequenceSettingsCommand` y
+    `RenameSequenceCommand`.
+  - El selector del timeline (`TimelinePanel::sequenceRequested`) cambia la secuencia activa en el timeline, el
+    monitor de programa y el mezclador.
+  - Add Tracks agrega N pistas de video y N de audio en un solo paso de deshacer (`MacroCommand` de
+    `AddTrackCommand`).
+
 ## 8. Export
 
 Implementado en la Fase 10 (D22, D23), en el módulo `export` (namespace `loki::exporter`).

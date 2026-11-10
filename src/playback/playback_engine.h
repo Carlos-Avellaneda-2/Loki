@@ -36,6 +36,10 @@ struct PlaybackOptions {
     std::size_t cacheBytes = 384u * 1024u * 1024u;
     bool allowHardware = true;
     int lookAheadFrames = 8;
+    // Sized by the performance profile (playback/performance.h).
+    std::size_t maxVideoDecoders = 8;
+    std::size_t compositeCacheEntries = 48;
+    bool parallelPlaybackDecode = false;
 };
 
 // Levels heard now (meters). Empty/inactive while not playing at 1x.

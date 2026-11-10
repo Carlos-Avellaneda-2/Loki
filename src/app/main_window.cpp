@@ -14,6 +14,8 @@
 #include "ui/effect_controls_panel.h"
 #include "ui/effects_panel.h"
 #include "app/export_dialog.h"
+#include "app/sequence_dialog.h"
+#include "commands/project_commands.h"
 #include "ui/auto_saver.h"
 #include "ui/stall_detector.h"
 #include "commands/effect_commands.h"
@@ -175,6 +177,7 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
     connect(m_timeline, &ui::timeline::TimelinePanel::statusMessage, this,
             [this](const QString& text) { statusBar()->showMessage(text, 5000); });
     connect(m_sourceMonitor, &ui::SourceMonitorPanel::editRequested, this, &MainWindow::sourceEdit);
+    connect(m_timeline, &ui::timeline::TimelinePanel::sequenceRequested, this, &MainWindow::setActiveSequence);
     connect(m_controller, &ui::ProjectController::projectReset, this, &MainWindow::activateFirstSequence);
     connect(m_controller, &ui::ProjectController::projectChanged, this, [this](const model::ChangeEvent& e) {
         if (e.kind == model::ChangeKind::SequenceRemoved && e.id == m_activeSequence.uuid()) {
@@ -188,10 +191,79 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
 
 void MainWindow::activateFirstSequence() {
     const auto& sequences = m_controller->project().sequences();
-    m_activeSequence = sequences.empty() ? model::SequenceId() : sequences.front().id;
+    setActiveSequence(sequences.empty() ? model::SequenceId() : sequences.front().id);
+}
+
+void MainWindow::setActiveSequence(model::SequenceId id) {
+    m_activeSequence = id;
     m_timeline->setSequence(m_activeSequence);
     m_programMonitor->setSequence(m_activeSequence);
     m_audioMixer->setSequence(m_activeSequence);
+}
+
+bool MainWindow::createSequence(const std::string& name, const model::SequenceSettings& settings, int videoTracks,
+                                int audioTracks) {
+    auto sequence = model::makeDefaultSequence(name, settings, std::max(1, videoTracks), std::max(0, audioTracks));
+    const auto id = sequence.id;
+    if (!m_controller->execute(std::make_unique<commands::AddSequenceCommand>(std::move(sequence)))) {
+        return false;
+    }
+    setActiveSequence(id);
+    return true;
+}
+
+void MainWindow::newSequence() {
+    SequenceDialog dialog(SequenceDialog::Mode::Create, this);
+    if (const auto* current = m_controller->project().findSequence(m_activeSequence)) {
+        dialog.setSequence(tr("Sequence %1").arg(m_controller->project().sequences().size() + 1).toStdString(),
+                           current->settings);
+    }
+    if (dialog.exec() == QDialog::Accepted) {
+        createSequence(dialog.name(), dialog.settings(), dialog.videoTracks(), dialog.audioTracks());
+    }
+}
+
+void MainWindow::sequenceSettings() {
+    const auto* seq = m_controller->project().findSequence(m_activeSequence);
+    if (seq == nullptr) {
+        return;
+    }
+    SequenceDialog dialog(SequenceDialog::Mode::Edit, this);
+    dialog.setSequence(seq->name, seq->settings);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    std::vector<std::unique_ptr<commands::Command>> steps;
+    if (dialog.name() != seq->name) {
+        steps.push_back(std::make_unique<commands::RenameSequenceCommand>(m_activeSequence, dialog.name()));
+    }
+    if (!(dialog.settings() == seq->settings)) {
+        steps.push_back(std::make_unique<commands::SetSequenceSettingsCommand>(m_activeSequence, dialog.settings()));
+    }
+    if (!steps.empty()) {
+        m_controller->execute(std::make_unique<commands::MacroCommand>("Sequence Settings", std::move(steps)));
+    }
+}
+
+bool MainWindow::addTracks(int video, int audio) {
+    std::vector<std::unique_ptr<commands::Command>> steps;
+    for (int i = 0; i < video; ++i) {
+        steps.push_back(std::make_unique<commands::AddTrackCommand>(m_activeSequence, model::TrackKind::Video));
+    }
+    for (int i = 0; i < audio; ++i) {
+        steps.push_back(std::make_unique<commands::AddTrackCommand>(m_activeSequence, model::TrackKind::Audio));
+    }
+    if (steps.empty() || m_controller->project().findSequence(m_activeSequence) == nullptr) {
+        return false;
+    }
+    return m_controller->execute(std::make_unique<commands::MacroCommand>("Add Tracks", std::move(steps)));
+}
+
+void MainWindow::addTracks() {
+    AddTracksDialog dialog(this);
+    if (dialog.exec() == QDialog::Accepted) {
+        addTracks(dialog.videoTracks(), dialog.audioTracks());
+    }
 }
 
 void MainWindow::sourceEdit(model::MediaId media, bool insert) {
@@ -504,6 +576,23 @@ void MainWindow::createMenus() {
     connect(preferences, &QAction::triggered, this, [this] {
         PreferencesDialog dialog(*m_services, m_autoSaver, this);
         dialog.exec();
+    });
+
+    auto* sequenceMenu = menuBar()->addMenu(tr("&Sequence"));
+    auto* newSequenceAction = sequenceMenu->addAction(tr("&New Sequence..."));
+    m_shortcuts->bind(newSequenceAction, QStringLiteral("app.newSequence"),
+                      QString::fromLatin1(ui::ShortcutManager::kApplicationContext), QKeySequence(Qt::CTRL | Qt::Key_N));
+    connect(newSequenceAction, &QAction::triggered, this, [this] { newSequence(); });
+    sequenceMenu->addAction(tr("Sequence &Settings..."), this, [this] { sequenceSettings(); });
+    sequenceMenu->addSeparator();
+    sequenceMenu->addAction(tr("&Add Tracks..."), this, [this] { addTracks(); });
+    sequenceMenu->addSeparator();
+    sequenceMenu->addAction(tr("&Delete Sequence"), this, [this] {
+        if (m_controller->project().sequences().size() < 2) {
+            statusBar()->showMessage(tr("A project keeps at least one sequence"), 4000);
+            return;
+        }
+        m_controller->execute(std::make_unique<commands::RemoveSequenceCommand>(m_activeSequence));
     });
 
     auto* windowMenu = menuBar()->addMenu(tr("&Window"));

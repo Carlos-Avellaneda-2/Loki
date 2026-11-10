@@ -7,6 +7,9 @@
 #include "media/ffmpeg_utils.h"
 #include "util/logging.h"
 
+#include "app/preferences_dialog.h"
+#include "playback/performance.h"
+
 #include <QApplication>
 #include <QIcon>
 #include <QTimer>
@@ -53,7 +56,18 @@ int main(int argc, char* argv[]) {
 
     loki::app::applyDarkTheme(app);
 
-    loki::app::MainWindow window;
+    // Playback sized for this computer (Preferences > Performance; applied at start-up).
+    const auto hardware = loki::playback::detectHardware();
+    const auto profile = loki::playback::performanceProfile(loki::app::PreferencesDialog::performanceMode(), hardware);
+    spdlog::info("Hardware: {} threads, {} MB RAM -> {} performance", hardware.threads, hardware.ramBytes >> 20,
+                 loki::playback::performanceModeName(profile.mode));
+    loki::playback::PlaybackOptions playback;
+    playback.cacheBytes = profile.frameCacheBytes;
+    playback.lookAheadFrames = profile.lookAheadFrames;
+    playback.maxVideoDecoders = profile.maxVideoDecoders;
+    playback.compositeCacheEntries = profile.compositeCacheEntries;
+    playback.parallelPlaybackDecode = profile.parallelPlaybackDecode;
+    loki::app::MainWindow window(nullptr, playback);
     bool geometryRestored = false;
     {
         const QSettings settings;
