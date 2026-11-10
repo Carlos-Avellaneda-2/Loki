@@ -1,5 +1,7 @@
 #include "ui/source_monitor_panel.h"
 
+#include "commands/marker_commands.h"
+
 #include "commands/project_commands.h"
 #include "ui/media_services.h"
 #include "ui/project_controller.h"
@@ -157,6 +159,22 @@ SourceMonitorPanel::SourceMonitorPanel(ProjectController& controller, MediaServi
 
 SourceMonitorPanel::~SourceMonitorPanel() = default;
 
+void SourceMonitorPanel::addClipMarker() {
+    const auto* item = currentItem();
+    if (item == nullptr) {
+        return;
+    }
+    model::Marker marker;
+    marker.time = m_engine->position();
+    try {
+        if (auto command = commands::makeAddMediaMarker(m_controller.project(), item->id, marker)) {
+            m_controller.execute(std::move(command));
+        }
+    } catch (const std::exception& e) {
+        emit m_controller.commandFailed(QString::fromUtf8(e.what()));
+    }
+}
+
 void SourceMonitorPanel::registerShortcuts(ShortcutManager& s) {
     const QString ctx = QStringLiteral("Source Monitor");
     const auto add = [&](const char* id, const QString& text, const QKeySequence& key, std::function<void()> fn) {
@@ -175,6 +193,7 @@ void SourceMonitorPanel::registerShortcuts(ShortcutManager& s) {
     add("goToIn", tr("Go to In"), QKeySequence(Qt::SHIFT | Qt::Key_I), [this] { goToIn(); });
     add("goToOut", tr("Go to Out"), QKeySequence(Qt::SHIFT | Qt::Key_O), [this] { goToOut(); });
     add("clearMarks", tr("Clear In and Out"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_X), [this] { clearInOut(); });
+    add("addMarker", tr("Add Clip Marker"), QKeySequence(Qt::Key_M), [this] { addClipMarker(); });
     add("start", tr("Go to Start"), QKeySequence(Qt::Key_Home), [this] { m_engine->seek(Rational()); });
     add("end", tr("Go to End"), QKeySequence(Qt::Key_End), [this] { m_engine->seek(m_engine->duration()); });
     add("insert", tr("Insert"), QKeySequence(Qt::Key_Comma), [this] {
@@ -199,7 +218,8 @@ void SourceMonitorPanel::loadMedia(model::MediaId id) {
         return;
     }
     if (item->isGenerated()) {
-        emit m_controller.commandFailed(tr("Titles are edited in the timeline and Effect Controls"));
+        emit m_controller.commandFailed(item->isNest() ? tr("Nested sequences open in the Timeline (double-click the clip)")
+                                                       : tr("Generated items are edited in the timeline and Effect Controls"));
         return;
     }
     m_media = id;

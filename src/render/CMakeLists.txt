@@ -11,6 +11,8 @@ add_library(loki_render_core STATIC
     cpu_compositor.cpp
     grading.h
     grading.cpp
+    scopes.h
+    scopes.cpp
 )
 add_library(loki::render_core ALIAS loki_render_core)
 target_include_directories(loki_render_core PUBLIC "${PROJECT_SOURCE_DIR}/src")

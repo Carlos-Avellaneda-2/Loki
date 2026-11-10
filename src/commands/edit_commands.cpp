@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <string_view>
 #include <unordered_set>
 
 namespace loki::commands {
@@ -192,21 +193,16 @@ void EditPlan::clearRange(TrackId track, const Rational& start, const Rational& 
         if (coversStart && coversEnd) { // spans the range: keep both sides
             Clip right = c;
             right.id = ClipId::generate();
-            right.start = end;
-            right.sourceIn = c.sourceIn + (end - c.start);
-            right.duration = c.end() - end;
+            right.moveIn(end - c.start);
             right.link = splitLinkFor(c.link);
-            c.duration = start - c.start;
+            c.moveOut(start - c.end());
             result.push_back(std::move(c));
             result.push_back(std::move(right));
         } else if (coversStart) {
-            c.duration = start - c.start;
+            c.moveOut(start - c.end());
             result.push_back(std::move(c));
         } else if (coversEnd) {
-            const Rational cut = end - c.start;
-            c.sourceIn += cut;
-            c.duration -= cut;
-            c.start = end;
+            c.moveIn(end - c.start);
             result.push_back(std::move(c));
         }
         // fully inside: dropped
@@ -220,11 +216,9 @@ ClipId EditPlan::splitAt(TrackId track, const Rational& at) {
         if (c.start < at && at < c.end()) {
             Clip right = c;
             right.id = ClipId::generate();
-            right.start = at;
-            right.sourceIn = c.sourceIn + (at - c.start);
-            right.duration = c.end() - at;
+            right.moveIn(at - c.start);
             right.link = splitLinkFor(c.link);
-            c.duration = at - c.start;
+            c.moveOut(at - c.end());
             const auto id = right.id;
             list.push_back(std::move(right));
             return id;
@@ -406,6 +400,21 @@ Rational frameDuration(const Sequence& seq) {
     return seq.settings.frameRate.reciprocal();
 }
 
+// Whole sequence frames in `t` (source room of retimed clips is not frame aligned).
+Rational floorToFrame(const Rational& t, const Sequence& seq) {
+    return quantizeToFrame(max(Rational(), t), seq.settings.frameRate, Rounding::Floor);
+}
+
+// Media duration limit for a clip (nullopt = unlimited: stills, generated media such as nested
+// sequences, or unknown duration).
+std::optional<Rational> mediaLimit(const Project& project, const Clip& clip) {
+    const auto* media = project.findMedia(clip.media);
+    if (media == nullptr || media->info.isStill || media->isGenerated() || !media->info.duration.isPositive()) {
+        return std::nullopt;
+    }
+    return media->info.duration;
+}
+
 } // namespace
 
 SourceRange sourceRangeOf(const MediaItem& item) {
@@ -416,6 +425,16 @@ SourceRange sourceRangeOf(const MediaItem& item) {
     const Rational out = item.markOut.value_or(full);
     r.duration = max(Rational(), out - r.sourceIn);
     return r;
+}
+
+SourceRange sourceRangeOf(const Project& project, const MediaItem& item) {
+    if (!item.isNest()) {
+        return sourceRangeOf(item);
+    }
+    MediaItem live = item;
+    const auto* seq = project.findSequence(item.sequence);
+    live.info.duration = seq != nullptr && seq->duration().isPositive() ? seq->duration() : Rational(5);
+    return sourceRangeOf(live);
 }
 
 std::unique_ptr<Command> makeOverwriteEdit(const Project& project, SequenceId sequence, const SourceRange& range,
@@ -541,8 +560,7 @@ std::unique_ptr<Command> makeTrimEdge(const Project& project, SequenceId sequenc
             continue;
         }
         const auto& c = placed->clip;
-        const auto* media = project.findMedia(c.media);
-        const bool limited = media != nullptr && !media->info.isStill && media->info.duration.isPositive();
+        const auto limit = mediaLimit(project, c);
         const auto& list = plan.clips(placed->track);
         Rational prevEnd;
         std::optional<Rational> nextStart;
@@ -557,12 +575,14 @@ std::unique_ptr<Command> makeTrimEdge(const Project& project, SequenceId sequenc
             }
         }
         if (edge == ClipEdge::In) {
-            lower(-c.sourceIn);           // source starts at 0
-            lower(prevEnd - c.start);     // no overwrite of the previous clip
+            if (const auto room = c.roomBefore(limit)) {
+                lower(-floorToFrame(*room, plan.sequence())); // source starts at 0
+            }
+            lower(prevEnd - c.start); // no overwrite of the previous clip
             upper(c.duration - minDuration);
         } else {
-            if (limited) {
-                upper(media->info.duration - c.sourceOut());
+            if (const auto room = c.roomAfter(limit)) {
+                upper(floorToFrame(*room, plan.sequence()));
             }
             if (nextStart) {
                 upper(*nextStart - c.end());
@@ -570,10 +590,17 @@ std::unique_ptr<Command> makeTrimEdge(const Project& project, SequenceId sequenc
             lower(minDuration - c.duration);
         }
     }
-    if (!lo || !hi || *hi < *lo) {
+    // A missing bound is unlimited (stills, generated media, no neighbour).
+    if (lo && hi && *hi < *lo) {
         return nullptr;
     }
-    const Rational d = min(max(delta, *lo), *hi);
+    Rational d = delta;
+    if (lo) {
+        d = max(d, *lo);
+    }
+    if (hi) {
+        d = min(d, *hi);
+    }
     if (d.isZero()) {
         return nullptr;
     }
@@ -584,11 +611,9 @@ std::unique_ptr<Command> makeTrimEdge(const Project& project, SequenceId sequenc
         }
         auto& c = placed->clip;
         if (edge == ClipEdge::In) {
-            c.start += d;
-            c.sourceIn += d;
-            c.duration -= d;
+            c.moveIn(d);
         } else {
-            c.duration += d;
+            c.moveOut(d);
         }
         plan.add(placed->track, std::move(c));
     }
@@ -618,15 +643,6 @@ std::unique_ptr<Command> makeDeleteClips(const Project& project, SequenceId sequ
 // Phase 7
 
 namespace {
-
-// Media duration limit for a clip (nullopt = unlimited: stills or unknown duration).
-std::optional<Rational> mediaLimit(const Project& project, const Clip& clip) {
-    const auto* media = project.findMedia(clip.media);
-    if (media == nullptr || media->info.isStill || !media->info.duration.isPositive()) {
-        return std::nullopt;
-    }
-    return media->info.duration;
-}
 
 struct Range {
     std::optional<Rational> lo;
@@ -706,11 +722,13 @@ std::unique_ptr<Command> makeRippleTrim(const Project& project, SequenceId seque
         oldEnd = c.end();
         const auto limit = mediaLimit(project, c);
         if (edge == ClipEdge::In) {
-            range.lower(-c.sourceIn);
+            if (const auto room = c.roomBefore(limit)) {
+                range.lower(-floorToFrame(*room, plan.sequence()));
+            }
             range.upper(c.duration - minDuration);
         } else {
-            if (limit) {
-                range.upper(*limit - c.sourceOut());
+            if (const auto room = c.roomAfter(limit)) {
+                range.upper(floorToFrame(*room, plan.sequence()));
             }
             range.lower(minDuration - c.duration);
         }
@@ -724,11 +742,12 @@ std::unique_ptr<Command> makeRippleTrim(const Project& project, SequenceId seque
     std::vector<PlacedClip> trimmed;
     for (const auto id : ids) {
         if (auto placed = plan.take(id)) {
+            const Rational start = placed->clip.start;
             if (edge == ClipEdge::In) {
-                placed->clip.sourceIn += *d;
-                placed->clip.duration -= *d;
+                placed->clip.moveIn(*d);
+                placed->clip.start = start; // ripple: the clip keeps its start
             } else {
-                placed->clip.duration += *d;
+                placed->clip.moveOut(*d);
             }
             trimmed.push_back(std::move(*placed));
         }
@@ -762,14 +781,16 @@ std::unique_ptr<Command> makeRollEdit(const Project& project, SequenceId sequenc
         Pair pair;
         if (left != nullptr) {
             pair.left = left->id;
-            if (const auto limit = mediaLimit(project, *left)) {
-                range.upper(*limit - left->sourceOut());
+            if (const auto room = left->roomAfter(mediaLimit(project, *left))) {
+                range.upper(floorToFrame(*room, plan.sequence()));
             }
             range.lower(minDuration - left->duration);
         }
         if (right != nullptr) {
             pair.right = right->id;
-            range.lower(-right->sourceIn);
+            if (const auto room = right->roomBefore(mediaLimit(project, *right))) {
+                range.lower(-floorToFrame(*room, plan.sequence()));
+            }
             range.upper(right->duration - minDuration);
         }
         if (left == nullptr || right == nullptr) {
@@ -791,14 +812,12 @@ std::unique_ptr<Command> makeRollEdit(const Project& project, SequenceId sequenc
     for (const auto& pair : pairs) {
         if (pair.left) {
             auto l = plan.take(pair.left);
-            l->clip.duration += *d;
+            l->clip.moveOut(*d);
             plan.add(l->track, std::move(l->clip));
         }
         if (pair.right) {
             auto r = plan.take(pair.right);
-            r->clip.start += *d;
-            r->clip.sourceIn += *d;
-            r->clip.duration -= *d;
+            r->clip.moveIn(*d);
             plan.add(r->track, std::move(r->clip));
         }
     }
@@ -812,9 +831,10 @@ std::unique_ptr<Command> makeSlipEdit(const Project& project, SequenceId sequenc
     Range range;
     for (const auto id : ids) {
         if (const auto placed = plan.find(id)) {
-            range.lower(-placed->clip.sourceIn);
-            if (const auto limit = mediaLimit(project, placed->clip)) {
-                range.upper(*limit - placed->clip.sourceOut());
+            const auto& c = placed->clip;
+            range.lower(-floorToFrame(c.sourceIn / c.slipFactor(), plan.sequence()));
+            if (const auto limit = mediaLimit(project, c)) {
+                range.upper(floorToFrame(max(Rational(), *limit - c.sourceOut()) / c.slipFactor(), plan.sequence()));
             }
         }
     }
@@ -824,7 +844,7 @@ std::unique_ptr<Command> makeSlipEdit(const Project& project, SequenceId sequenc
     }
     for (const auto id : ids) {
         if (auto placed = plan.take(id)) {
-            placed->clip.sourceIn += *d;
+            placed->clip.sourceIn += *d * placed->clip.slipFactor();
             plan.add(placed->track, std::move(placed->clip));
         }
     }
@@ -855,15 +875,17 @@ std::unique_ptr<Command> makeSlideEdit(const Project& project, SequenceId sequen
         if (const auto* left = neighbourAt(list, c.start, true, c.id)) {
             n.left = left->id;
             range.lower(minDuration - left->duration);
-            if (const auto limit = mediaLimit(project, *left)) {
-                range.upper(*limit - left->sourceOut());
+            if (const auto room = left->roomAfter(mediaLimit(project, *left))) {
+                range.upper(floorToFrame(*room, plan.sequence()));
             }
         } else {
             range.lower(gapStart - c.start);
         }
         if (const auto* right = neighbourAt(list, c.end(), false, c.id)) {
             n.right = right->id;
-            range.lower(-right->sourceIn);
+            if (const auto room = right->roomBefore(mediaLimit(project, *right))) {
+                range.lower(-floorToFrame(*room, plan.sequence()));
+            }
             range.upper(right->duration - minDuration);
         } else if (gapEnd) {
             range.upper(*gapEnd - c.end());
@@ -877,14 +899,12 @@ std::unique_ptr<Command> makeSlideEdit(const Project& project, SequenceId sequen
     for (const auto& n : all) {
         if (n.left) {
             auto l = plan.take(n.left);
-            l->clip.duration += *d;
+            l->clip.moveOut(*d);
             plan.add(l->track, std::move(l->clip));
         }
         if (n.right) {
             auto r = plan.take(n.right);
-            r->clip.start += *d;
-            r->clip.sourceIn += *d;
-            r->clip.duration -= *d;
+            r->clip.moveIn(*d);
             plan.add(r->track, std::move(r->clip));
         }
         auto self = plan.take(n.self);
@@ -984,22 +1004,28 @@ std::unique_ptr<Command> makeUnlinkClips(const Project& project, SequenceId sequ
 
 std::unique_ptr<Command> makeNewTitle(const Project& project, SequenceId sequence, TrackId track, const Rational& at,
                                       const Rational& duration, std::string name, MediaId* titleMedia) {
+    return makeNewGeneratedClip(project, sequence, track, at, duration, std::move(name), kTitleGenerator, titleMedia);
+}
+
+std::unique_ptr<Command> makeNewGeneratedClip(const Project& project, SequenceId sequence, TrackId track,
+                                              const Rational& at, const Rational& duration, std::string name,
+                                              std::string_view generator, MediaId* newMedia) {
     EditPlan plan(project, sequence);
     const auto& seq = plan.sequence();
     const auto ref = project.findTrack(track);
     if (ref.track == nullptr || ref.sequence != &seq || ref.track->kind != TrackKind::Video) {
-        throw CommandError("Titles go on a video track of the sequence");
+        throw CommandError("This item goes on a video track of the sequence");
     }
     if (plan.isLocked(track)) {
         throw CommandError("Track is locked");
     }
     if (at.isNegative() || !duration.isPositive()) {
-        throw CommandError("Invalid title placement");
+        throw CommandError("Invalid placement");
     }
     MediaItem media;
     media.id = MediaId::generate();
     media.name = std::move(name);
-    media.generator = std::string(kTitleGenerator);
+    media.generator = std::string(generator);
     media.info.hasVideo = true;
     media.info.isStill = true;
     media.info.width = seq.settings.width;
@@ -1013,13 +1039,318 @@ std::unique_ptr<Command> makeNewTitle(const Project& project, SequenceId sequenc
     clip.duration = duration;
     plan.clearRange(track, at, at + duration);
     plan.add(track, std::move(clip));
-    if (titleMedia != nullptr) {
-        *titleMedia = media.id;
+    if (newMedia != nullptr) {
+        *newMedia = media.id;
     }
+    const std::string text = "New " + media.name;
     std::vector<std::unique_ptr<Command>> steps;
     steps.push_back(std::make_unique<AddMediaCommand>(std::move(media)));
-    steps.push_back(plan.build("Place Title"));
-    return std::make_unique<MacroCommand>("New Title", std::move(steps));
+    steps.push_back(plan.build("Place " + text.substr(4)));
+    return std::make_unique<MacroCommand>(text, std::move(steps));
+}
+
+// --- Speed ----------------------------------------------------------------------------------------
+
+std::unique_ptr<Command> makeSetClipSpeed(const Project& project, SequenceId sequence, const std::vector<ClipId>& clips,
+                                          const Rational& speed, bool reverse, bool ripple) {
+    if (!speed.isPositive() || speed > Rational(kMaxClipSpeed)) {
+        throw CommandError("Speed must be between 0 and 10000 %");
+    }
+    EditPlan plan(project, sequence);
+    const auto& seq = plan.sequence();
+    const Rational frame = frameDuration(seq);
+    std::set<ClipId> ids;
+    for (const auto id : clips) {
+        for (const auto linked : plan.withLinked(id)) {
+            ids.insert(linked);
+        }
+    }
+    struct Change {
+        TrackId track;
+        Clip clip;
+        Rational oldEnd;
+    };
+    std::vector<Change> changes;
+    for (const auto id : ids) {
+        auto placed = plan.find(id);
+        if (!placed) {
+            continue;
+        }
+        if (plan.isLocked(placed->track)) {
+            throw CommandError("Track is locked");
+        }
+        Clip c = placed->clip;
+        const Rational oldEnd = c.end();
+        Rational duration = c.speed.isZero()
+                                ? c.duration
+                                : max(frame, quantizeToFrame(c.sourceSpan() / speed, seq.settings.frameRate, Rounding::Nearest));
+        if (const auto limit = mediaLimit(project, c)) {
+            duration = min(duration, max(frame, floorToFrame((*limit - c.sourceIn) / speed, seq)));
+        }
+        if (!ripple) {
+            const auto [gapStart, gapEnd] = gapAround(plan.clips(placed->track), c);
+            (void)gapStart;
+            if (gapEnd) {
+                duration = min(duration, *gapEnd - c.start);
+            }
+        }
+        c.speed = speed;
+        c.reverse = reverse;
+        c.duration = duration;
+        changes.push_back({placed->track, std::move(c), oldEnd});
+    }
+    if (changes.empty()) {
+        return nullptr;
+    }
+    for (const auto& change : changes) {
+        plan.take(change.clip.id);
+    }
+    // Latest first, so each shift sees the original positions after its edit point.
+    std::sort(changes.begin(), changes.end(), [](const Change& a, const Change& b) { return b.oldEnd < a.oldEnd; });
+    if (ripple) {
+        // On each track everything after a changed clip follows its new end (accumulated): the
+        // other clips through shiftFrom, the changed ones by the deltas of those before them.
+        std::vector<Rational> starts;
+        for (const auto& change : changes) {
+            starts.push_back(change.clip.start);
+        }
+        for (const auto& change : changes) {
+            const Rational delta = change.clip.end() - change.oldEnd;
+            plan.shiftFrom(change.track, change.oldEnd, delta);
+            for (std::size_t i = 0; i < changes.size(); ++i) {
+                if (changes[i].track == change.track && change.oldEnd <= starts[i]) {
+                    changes[i].clip.start += delta;
+                }
+            }
+        }
+    }
+    for (auto& change : changes) {
+        plan.add(change.track, std::move(change.clip));
+    }
+    return plan.build("Speed/Duration");
+}
+
+std::unique_ptr<Command> makeRateStretch(const Project& project, SequenceId sequence, ClipId clip, ClipEdge edge,
+                                         const Rational& delta, bool includeLinked, GestureId gesture) {
+    EditPlan plan(project, sequence);
+    const auto& seq = plan.sequence();
+    const Rational frame = frameDuration(seq);
+    const auto ids = groupOf(plan, clip, includeLinked);
+    Range range;
+    for (const auto id : ids) {
+        const auto placed = plan.find(id);
+        if (!placed) {
+            continue;
+        }
+        const auto& c = placed->clip;
+        // The shortest duration keeps the speed at or below the maximum.
+        const Rational shortest = max(frame, quantizeToFrame(c.sourceSpan() / Rational(kMaxClipSpeed),
+                                                             seq.settings.frameRate, Rounding::Ceil));
+        const auto [gapStart, gapEnd] = gapAround(plan.clips(placed->track), c);
+        if (edge == ClipEdge::In) {
+            range.lower(gapStart - c.start);
+            range.upper(c.duration - shortest);
+        } else {
+            if (gapEnd) {
+                range.upper(*gapEnd - c.end());
+            }
+            range.lower(shortest - c.duration);
+        }
+    }
+    const auto d = range.clamp(delta);
+    if (!d || d->isZero()) {
+        return nullptr;
+    }
+    for (const auto id : ids) {
+        auto placed = plan.take(id);
+        if (!placed) {
+            continue;
+        }
+        auto& c = placed->clip;
+        const Rational span = c.sourceSpan();
+        if (edge == ClipEdge::In) {
+            c.start += *d;
+            c.duration -= *d;
+        } else {
+            c.duration += *d;
+        }
+        if (!c.speed.isZero()) {
+            c.speed = span / c.duration;
+        }
+        plan.add(placed->track, std::move(c));
+    }
+    return plan.build("Rate Stretch", gesture);
+}
+
+std::unique_ptr<Command> makeAddFrameHold(const Project& project, SequenceId sequence, ClipId clip, const Rational& at) {
+    EditPlan plan(project, sequence);
+    auto placed = plan.find(clip);
+    if (!placed) {
+        throw CommandError("Clip is not part of this sequence");
+    }
+    const auto ref = project.findTrack(placed->track);
+    if (ref.track == nullptr || ref.track->kind != TrackKind::Video) {
+        throw CommandError("Frame Hold needs a video clip");
+    }
+    if (plan.isLocked(placed->track)) {
+        throw CommandError("Track is locked");
+    }
+    const Clip c = placed->clip;
+    if (at < c.start || !(at < c.end())) {
+        throw CommandError("The playhead must be over the clip");
+    }
+    plan.take(clip);
+    Clip hold = c;
+    if (c.start < at) {
+        Clip left = c;
+        left.moveOut(at - c.end());
+        plan.add(placed->track, std::move(left));
+        hold.id = ClipId::generate();
+        hold.link = LinkId();
+        hold.moveIn(at - c.start);
+    }
+    hold.sourceIn = c.toSourceTime(at);
+    hold.speed = Rational();
+    hold.reverse = false;
+    hold.fadeIn = {};
+    plan.add(placed->track, std::move(hold));
+    return plan.build("Add Frame Hold");
+}
+
+// --- Nest -----------------------------------------------------------------------------------------
+
+MediaItem makeNestMedia(const Sequence& sequence, std::string name) {
+    MediaItem media;
+    media.id = MediaId::generate();
+    media.name = std::move(name);
+    media.generator = std::string(kNestGenerator);
+    media.sequence = sequence.id;
+    media.info.hasVideo = true;
+    media.info.hasAudio = true;
+    media.info.width = sequence.settings.width;
+    media.info.height = sequence.settings.height;
+    media.info.frameRate = sequence.settings.frameRate;
+    media.info.duration = sequence.duration();
+    media.info.sampleRate = sequence.settings.sampleRate;
+    media.info.audioChannels = 2;
+    return media;
+}
+
+std::unique_ptr<Command> makeNest(const Project& project, SequenceId sequence, const std::vector<ClipId>& clips,
+                                  std::string name, MediaId* nestMedia, SequenceId* nestedSequence) {
+    EditPlan plan(project, sequence);
+    const auto& seq = plan.sequence();
+    std::set<ClipId> ids;
+    for (const auto id : clips) {
+        for (const auto linked : plan.withLinked(id)) {
+            ids.insert(linked);
+        }
+    }
+    if (ids.empty()) {
+        throw CommandError("Select the clips to nest");
+    }
+    // Range and lowest track used per kind.
+    std::optional<Rational> first;
+    Rational last;
+    std::optional<std::size_t> lowest[2];
+    std::size_t highest[2] = {0, 0};
+    for (const auto kind : {TrackKind::Video, TrackKind::Audio}) {
+        const auto k = static_cast<std::size_t>(kind);
+        const auto& tracks = seq.tracks(kind);
+        for (std::size_t i = 0; i < tracks.size(); ++i) {
+            for (const auto& c : tracks[i].clips) {
+                if (!ids.contains(c.id)) {
+                    continue;
+                }
+                if (tracks[i].state.locked) {
+                    throw CommandError("Track is locked");
+                }
+                first = first ? min(*first, c.start) : c.start;
+                last = max(last, c.end());
+                lowest[k] = lowest[k] ? std::min(*lowest[k], i) : i;
+                highest[k] = std::max(highest[k], i);
+            }
+        }
+    }
+    if (!first) {
+        return nullptr;
+    }
+    // The nested sequence: same settings, tracks up to the highest used, clips shifted to 0.
+    const auto videoCount = static_cast<int>(lowest[0] ? highest[0] + 1 : 1);
+    const auto audioCount = static_cast<int>(lowest[1] ? highest[1] + 1 : 1);
+    Sequence nested = makeDefaultSequence(name, seq.settings, std::max(videoCount, 1), std::max(audioCount, 1));
+    std::unordered_map<ClipId, ClipId> newIds;
+    std::unordered_map<LinkId, LinkId> newLinks;
+    for (const auto kind : {TrackKind::Video, TrackKind::Audio}) {
+        const auto& tracks = seq.tracks(kind);
+        auto& target = kind == TrackKind::Video ? nested.videoTracks : nested.audioTracks;
+        for (std::size_t i = 0; i < tracks.size() && i < target.size(); ++i) {
+            for (const auto& c : tracks[i].clips) {
+                if (!ids.contains(c.id)) {
+                    continue;
+                }
+                Clip copy = c;
+                copy.id = ClipId::generate();
+                copy.start = c.start - *first;
+                if (!c.link.isNull()) {
+                    auto [it, inserted] = newLinks.try_emplace(c.link, LinkId());
+                    if (inserted) {
+                        it->second = LinkId::generate();
+                    }
+                    copy.link = it->second;
+                }
+                newIds.emplace(c.id, copy.id);
+                target[i].clips.push_back(std::move(copy));
+            }
+            // Transitions whose clips all move along.
+            for (const auto& t : tracks[i].transitions) {
+                const bool fromIn = t.from.isNull() || newIds.contains(t.from);
+                const bool toIn = t.to.isNull() || newIds.contains(t.to);
+                if (fromIn && toIn && (!t.from.isNull() || !t.to.isNull())) {
+                    Transition copy = t;
+                    copy.id = TransitionId::generate();
+                    copy.from = t.from.isNull() ? ClipId() : newIds.at(t.from);
+                    copy.to = t.to.isNull() ? ClipId() : newIds.at(t.to);
+                    target[i].transitions.push_back(std::move(copy));
+                }
+            }
+        }
+    }
+    MediaItem media = makeNestMedia(nested, name);
+    media.info.hasVideo = lowest[0].has_value();
+    media.info.hasAudio = lowest[1].has_value();
+    // The parent: remove the clips, place the nested clip(s).
+    for (const auto id : ids) {
+        plan.take(id);
+    }
+    const LinkId link = lowest[0] && lowest[1] ? LinkId::generate() : LinkId();
+    for (const auto kind : {TrackKind::Video, TrackKind::Audio}) {
+        const auto k = static_cast<std::size_t>(kind);
+        if (!lowest[k]) {
+            continue;
+        }
+        const auto track = seq.tracks(kind)[*lowest[k]].id;
+        plan.clearRange(track, *first, last);
+        Clip clip;
+        clip.id = ClipId::generate();
+        clip.media = media.id;
+        clip.name = media.name;
+        clip.start = *first;
+        clip.duration = last - *first;
+        clip.link = link;
+        plan.add(track, std::move(clip));
+    }
+    if (nestMedia != nullptr) {
+        *nestMedia = media.id;
+    }
+    if (nestedSequence != nullptr) {
+        *nestedSequence = nested.id;
+    }
+    std::vector<std::unique_ptr<Command>> steps;
+    steps.push_back(std::make_unique<AddSequenceCommand>(std::move(nested)));
+    steps.push_back(std::make_unique<AddMediaCommand>(std::move(media)));
+    steps.push_back(plan.build("Replace with Nested Sequence"));
+    return std::make_unique<MacroCommand>("Nest", std::move(steps));
 }
 
 // --- Copy / paste --------------------------------------------------------------------------------

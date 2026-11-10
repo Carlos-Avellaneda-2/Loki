@@ -34,6 +34,7 @@ loki_add_test_executable(loki_util_tests
 
 loki_add_test_executable(loki_render_tests
     SOURCES
+        render/composite_alpha_test.cpp
         render/grading_test.cpp
     LIBS loki::render_core GTest::gtest GTest::gtest_main)
 
@@ -52,6 +53,7 @@ loki_add_test_executable(loki_model_tests
         model/keyframe_test.cpp
         model/project_json_test.cpp
         model/project_test.cpp
+        model/retime_markers_nest_test.cpp
     LIBS loki::model nlohmann_json::nlohmann_json GTest::gtest GTest::gtest_main)
 
 loki_add_test_executable(loki_commands_tests
@@ -64,6 +66,7 @@ loki_add_test_executable(loki_commands_tests
         commands/effect_commands_test.cpp
         commands/project_commands_test.cpp
         commands/random_edit_test.cpp
+        commands/retime_nest_commands_test.cpp
         commands/undo_stack_test.cpp
     LIBS loki::commands loki::render_core GTest::gtest GTest::gtest_main)
 
@@ -91,6 +94,7 @@ loki_add_test_executable(loki_playback_tests
         playback/mixer_source_test.cpp
         playback/performance_test.cpp
         playback/playback_test.cpp
+        playback/retime_nest_source_test.cpp
         playback/sequence_source_test.cpp
         playback/transition_source_test.cpp
     LIBS loki_test_support loki::playback loki::render GTest::gtest GTest::gtest_main)
@@ -99,6 +103,7 @@ loki_add_test_executable(loki_app_tests
     SOURCES
         app/main_window_test.cpp
         ui/audio_panels_test.cpp
+        ui/editing_tools_test.cpp
         ui/export_dialog_test.cpp
         ui/robustness_test.cpp
         ui/sequences_test.cpp

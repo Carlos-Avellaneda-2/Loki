@@ -64,6 +64,11 @@ private:
     bool m_publishScheduled = false;
 
     VideoView* m_view = nullptr;
+
+public:
+    [[nodiscard]] VideoView* videoView() const noexcept { return m_view; }
+
+private:
     ScrubBar* m_scrub = nullptr;
     QLabel* m_title = nullptr;
     QLabel* m_timecode = nullptr;

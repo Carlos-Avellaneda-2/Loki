@@ -47,8 +47,17 @@ private:
         unsigned int fbo = 0;
         unsigned int texture = 0;
     };
+    // Ping-pong pair of one nesting level (0 = the result; 1.. = nested sequences, D30).
+    struct Level {
+        std::array<Target, 2> targets{};
+        int width = 0;
+        int height = 0;
+        int current = 0; // index of the target holding the accumulated image
+    };
 
-    void ensureTargets(int width, int height);
+    Level& ensureLevel(std::size_t depth, int width, int height);
+    // Composites `frame` into level `depth`; returns false past the nesting limit.
+    bool renderLevel(const CompositeFrame& frame, int width, int height, std::size_t depth);
     void uploadLayer(std::size_t slot, const media::VideoFrame& frame);
     unsigned int lutTextureFor(const std::shared_ptr<const Lut3D>& lut);
 
@@ -63,8 +72,8 @@ private:
     QOpenGLShaderProgram m_presentProgram;
     QOpenGLVertexArrayObject m_vao;
     QOpenGLBuffer m_vbo{QOpenGLBuffer::VertexBuffer};
-    std::array<Target, 2> m_targets{};
-    int m_current = 0; // index of the target holding the accumulated image
+    std::vector<Level> m_levels;
+    std::size_t m_nextSlot = 0; // layer texture slot of the next frame layer (whole render)
     int m_width = 0;
     int m_height = 0;
     double m_canvasAspect = 16.0 / 9.0;

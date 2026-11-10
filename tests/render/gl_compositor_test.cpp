@@ -164,6 +164,61 @@ TEST_F(GlCompositorTest, GradingWipeLutAndAlphaMatchCpuCompositor) {
     }
 }
 
+// Nested sequences (D30): a transparent sub-composite whose empty area shows the layers below,
+// placed with its own transform and opacity; blend modes apply only over opaque pixels.
+TEST_F(GlCompositorTest, NestedTransparentCompositeMatchesCpuCompositor) {
+    auto inner = std::make_shared<render::CompositeFrame>();
+    inner->width = 32;
+    inner->height = 32;
+    inner->transparent = true;
+    inner->layers.push_back(layerOf(solid(16, 32, 30, 220, 60), 8, 16)); // left half only
+    render::Layer nested;
+    nested.nested = inner;
+    nested.sourceWidth = 32;
+    nested.sourceHeight = 32;
+    nested.transform.positionX = 32;
+    nested.transform.positionY = 16;
+    nested.transform.anchorX = 16;
+    nested.transform.anchorY = 16;
+    nested.transform.opacity = 70;
+    nested.transform.blend = BlendMode::Screen;
+    render::CompositeFrame frame{64, 32, {layerOf(solid(64, 32, 200, 40, 90), 32, 16), nested}};
+    compositor.render(frame, 64, 32);
+    const auto img = compositor.readback();
+    const auto cpu = render::compositeCpu(frame, 64, 32);
+    for (const int x : {4, 20, 28, 40, 60}) {
+        const auto expected = cpu.pixel(x, 16);
+        const auto got = at(img, x, 16);
+        EXPECT_NEAR(got.red(), expected[0], 3) << "x " << x;
+        EXPECT_NEAR(got.green(), expected[1], 3) << "x " << x;
+        EXPECT_NEAR(got.blue(), expected[2], 3) << "x " << x;
+    }
+    // Inside the nest's transparent half the background is untouched.
+    EXPECT_EQ(cpu.pixel(40, 16), (std::array<int, 3>{200, 40, 90}));
+}
+
+// Adjustment layers (D31): the grade applies to everything below, mixed by opacity.
+TEST_F(GlCompositorTest, AdjustmentLayerMatchesCpuCompositor) {
+    render::Layer adjustment;
+    adjustment.adjustment = true;
+    render::coverCanvas(adjustment, 64, 32);
+    adjustment.transform.opacity = 60;
+    adjustment.grade.color = {0.3f, 15.0f, 20.0f, -40.0f};
+    render::CompositeFrame frame{64, 32,
+                                 {layerOf(solid(32, 32, 180, 90, 40), 16, 16), layerOf(solid(32, 32, 20, 160, 220), 48, 16),
+                                  adjustment}};
+    compositor.render(frame, 64, 32);
+    const auto img = compositor.readback();
+    const auto cpu = render::compositeCpu(frame, 64, 32);
+    for (const int x : {8, 30, 40, 60}) {
+        const auto expected = cpu.pixel(x, 16);
+        const auto got = at(img, x, 16);
+        EXPECT_NEAR(got.red(), expected[0], 3) << "x " << x;
+        EXPECT_NEAR(got.green(), expected[1], 3) << "x " << x;
+        EXPECT_NEAR(got.blue(), expected[2], 3) << "x " << x;
+    }
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {

@@ -27,12 +27,20 @@ add_library(loki_ui STATIC
     project_item_model.cpp
     project_panel.h
     project_panel.cpp
+    marker_dialog.h
+    markers_panel.h
+    markers_panel.cpp
+    marker_dialog.cpp
+    scopes_panel.h
+    scopes_panel.cpp
     scrub_bar.h
     sequence_edits.h
     sequence_edits.cpp
     shortcut_manager.h
     shortcut_manager.cpp
     scrub_bar.cpp
+    speed_dialog.h
+    speed_dialog.cpp
     source_monitor_panel.h
     source_monitor_panel.cpp
     video_view.h

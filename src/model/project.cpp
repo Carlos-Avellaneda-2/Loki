@@ -42,6 +42,9 @@ std::string clipShapeProblem(const Clip& clip) {
     if (clip.start.isNegative()) {
         return "clip " + clip.id.toString() + " starts before zero";
     }
+    if (clip.speed.isNegative() || clip.speed > Rational(kMaxClipSpeed)) {
+        return "clip " + clip.id.toString() + " has an invalid speed";
+    }
     std::unordered_set<EffectId> effectIds;
     for (const auto& effect : clip.effects) {
         if (effect.id.isNull() || !effectIds.insert(effect.id).second) {
@@ -84,6 +87,26 @@ std::string trackProblem(const Track& track) {
             if (!(prev.start < track.clips[i].start)) {
                 return "track " + track.id.toString() + " clips are not sorted";
             }
+        }
+    }
+    return {};
+}
+
+std::string markersProblem(const std::vector<Marker>& markers) {
+    std::unordered_set<MarkerId> ids;
+    for (std::size_t i = 0; i < markers.size(); ++i) {
+        const auto& m = markers[i];
+        if (m.id.isNull() || !ids.insert(m.id).second) {
+            return "null or duplicate marker id";
+        }
+        if (m.time.isNegative() || m.duration.isNegative()) {
+            return "marker " + m.id.toString() + " has a negative time or duration";
+        }
+        if (static_cast<int>(m.color) < 0 || static_cast<int>(m.color) >= kMarkerColorCount) {
+            return "marker " + m.id.toString() + " has an invalid color";
+        }
+        if (i > 0 && m.time < markers[i - 1].time) {
+            return "markers are not sorted by time";
         }
     }
     return {};
@@ -204,6 +227,43 @@ std::vector<ClipId> Project::clipsUsingMedia(MediaId id) const {
     return result;
 }
 
+std::vector<SequenceId> Project::nestedSequencesOf(const Sequence& sequence) const {
+    std::vector<SequenceId> result;
+    for (const auto* list : {&sequence.videoTracks, &sequence.audioTracks}) {
+        for (const auto& track : *list) {
+            for (const auto& clip : track.clips) {
+                const auto* media = findMedia(clip.media);
+                if (media != nullptr && media->isNest() &&
+                    std::find(result.begin(), result.end(), media->sequence) == result.end()) {
+                    result.push_back(media->sequence);
+                }
+            }
+        }
+    }
+    return result;
+}
+
+bool Project::sequenceContains(SequenceId outer, SequenceId target) const {
+    std::vector<SequenceId> stack{outer};
+    std::unordered_set<SequenceId> seen;
+    while (!stack.empty()) {
+        const auto id = stack.back();
+        stack.pop_back();
+        if (id == target) {
+            return true;
+        }
+        if (!seen.insert(id).second) {
+            continue;
+        }
+        if (const auto* seq = findSequence(id)) {
+            for (const auto nested : nestedSequencesOf(*seq)) {
+                stack.push_back(nested);
+            }
+        }
+    }
+    return false;
+}
+
 bool Project::binIsWithin(BinId bin, BinId ancestor) const noexcept {
     // Bounded walk: a corrupt (cyclic) tree cannot loop forever.
     for (std::size_t guard = 0; !bin.isNull() && guard <= m_bins.size(); ++guard) {
@@ -245,11 +305,26 @@ std::vector<std::string> Project::validate() const {
         if (!media.bin.isNull() && findBin(media.bin) == nullptr) {
             problems.push_back("media " + media.id.toString() + " is in unknown bin");
         }
+        if (media.isNest() && findSequence(media.sequence) == nullptr) {
+            problems.push_back("nested media " + media.id.toString() + " references unknown sequence");
+        }
+        if (auto p = markersProblem(media.markers); !p.empty()) {
+            problems.push_back(p);
+        }
     }
     for (const auto& seq : m_sequences) {
         unique(seq.id.uuid(), "sequence");
         if (auto p = settingsProblem(seq.settings); !p.empty()) {
             problems.push_back(p);
+        }
+        if (auto p = markersProblem(seq.markers); !p.empty()) {
+            problems.push_back(p);
+        }
+        for (const auto nested : nestedSequencesOf(seq)) {
+            if (sequenceContains(nested, seq.id)) {
+                problems.push_back("sequence " + seq.id.toString() + " contains itself (nesting cycle)");
+                break;
+            }
         }
         for (const auto kind : {TrackKind::Video, TrackKind::Audio}) {
             for (const auto& track : seq.tracks(kind)) {
@@ -299,6 +374,12 @@ void Project::notify(const ChangeEvent& event) const {
 namespace {
 
 void checkMarks(const MediaItem& item) {
+    if (auto p = markersProblem(item.markers); !p.empty()) {
+        fail(p);
+    }
+    if (item.isNest() && item.sequence.isNull()) {
+        fail("nested media needs a sequence");
+    }
     if (item.markIn && item.markOut && !(*item.markIn < *item.markOut)) {
         fail("media In mark must be before Out mark");
     }
@@ -457,6 +538,11 @@ Sequence ProjectMutator::removeSequence(SequenceId id, std::size_t* indexOut) {
     if (it == sequences.end()) {
         fail("sequence does not exist");
     }
+    for (const auto& media : m_project.m_media) {
+        if (media.isNest() && media.sequence == id) {
+            fail("sequence is used by nested media " + media.name);
+        }
+    }
     if (indexOut != nullptr) {
         *indexOut = static_cast<std::size_t>(std::distance(sequences.begin(), it));
     }
@@ -486,6 +572,14 @@ void ProjectMutator::setSequenceMarks(SequenceId id, std::optional<Rational> in,
     }
     seq.markIn = in;
     seq.markOut = out;
+    m_project.notify({ChangeKind::SequenceChanged, id.uuid(), {}});
+}
+
+void ProjectMutator::setSequenceMarkers(SequenceId id, std::vector<Marker> markers) {
+    if (auto p = markersProblem(markers); !p.empty()) {
+        fail(p);
+    }
+    sequence(id).markers = std::move(markers);
     m_project.notify({ChangeKind::SequenceChanged, id.uuid(), {}});
 }
 
@@ -626,8 +720,15 @@ void ProjectMutator::checkClip(const Track& target, const Clip& clip, ClipId ign
     if (auto p = clipShapeProblem(clip); !p.empty()) {
         fail(p);
     }
-    if (m_project.findMedia(clip.media) == nullptr) {
+    const auto* media = m_project.findMedia(clip.media);
+    if (media == nullptr) {
         fail("clip references unknown media");
+    }
+    if (media->isNest()) {
+        const auto* owner = m_project.findTrack(target.id).sequence;
+        if (owner != nullptr && m_project.sequenceContains(media->sequence, owner->id)) {
+            fail("a sequence cannot contain itself");
+        }
     }
     for (const auto& other : target.clips) {
         if (other.id != ignore && overlaps(other, clip)) {

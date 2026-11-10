@@ -38,6 +38,8 @@ public:
     SourceMonitorPanel& operator=(SourceMonitorPanel&&) = delete;
 
     void registerShortcuts(ShortcutManager& shortcuts);
+    // Adds a clip marker (on the media item, D29) at the Source position (M).
+    void addClipMarker();
     // Proxy/original toggle (D24): a shared checkable action shown as a toolbar button.
     void setProxyAction(QAction* action);
     void setUseProxies(bool on);

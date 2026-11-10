@@ -21,7 +21,7 @@ class ProjectController;
 
 namespace loki::ui::timeline {
 
-enum class Tool { Selection, Razor, Ripple, Roll, Slip, Slide };
+enum class Tool { Selection, Razor, Ripple, Roll, Slip, Slide, RateStretch };
 
 // Connection to the Program Monitor's playback engine (the playhead lives there).
 struct Transport {
@@ -98,6 +98,17 @@ public:
     void togglePlay();
     void goToStart();
     void goToEnd();
+    // Markers (D29): sequence marker at the playhead (M), next / previous (Shift+M / Ctrl+Shift+M),
+    // remove the one at the playhead (Ctrl+Alt+M), edit one in a dialog.
+    void addMarker();
+    void goToMarker(bool next);
+    void clearMarkerAtPlayhead();
+    void editMarker(model::MarkerId id);
+    // Speed (D28): Speed/Duration dialog for the selection (Ctrl+R), Frame Hold at the playhead.
+    void speedDuration();
+    void addFrameHold();
+    // Nest (D30): moves the selection into a new sequence; asks for its name.
+    void nestSelection();
 
 signals:
     void statusMessage(const QString& text);
@@ -107,6 +118,8 @@ signals:
     void snappingChanged(bool on);
     void zoomChanged(double pixelsPerSecond);
     void scrollChanged();
+    // Double-click on a nested sequence clip (D30).
+    void openSequenceRequested(loki::model::SequenceId id);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -149,6 +162,10 @@ private:
     [[nodiscard]] Rational timeAt(double widgetX) const;
     [[nodiscard]] Rational snapped(const Rational& t, const std::set<model::ClipId>& exclude = {}) const;
     [[nodiscard]] const model::Track* trackOf(const TrackRow& row) const;
+    // Sequence marker under a ruler point (null if none).
+    [[nodiscard]] model::MarkerId markerAt(const QPoint& pos) const;
+    // The clip the playhead is over on the targeted video track (else the first selected one).
+    [[nodiscard]] std::optional<commands::PlacedClip> clipForFrameHold() const;
 
     void paintRuler(QPainter& p, const QRect& area) const;
     void paintHeaders(QPainter& p, const std::vector<TrackRow>& rows) const;

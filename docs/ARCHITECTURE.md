@@ -400,6 +400,30 @@ sequenceDiagram
   - Add Tracks agrega N pistas de video y N de audio en un solo paso de deshacer (`MacroCommand` de
     `AddTrackCommand`).
 
+## 7i. Herramientas de edición (Fase 13)
+
+- Velocidad (D28): `Clip::speed` (racional, 0 = frame hold) y `reverse`. Toda la aritmética de tiempo de clip vive
+  en `Clip` (`toSourceTime`, `moveIn`, `moveOut`, `roomBefore`, `roomAfter`), así cortes, recortes, roll, slip y
+  slide respetan la velocidad sin casos especiales.
+  - Video: `SequenceVideoSource::sourceTimeFor`; los clips en reversa leen rachas hacia atrás
+    (`VideoDecoder::framesUpTo`, se guardan las últimas 24).
+  - Audio: `SequenceAudioSource::readRetimed` con una ventana de muestras del origen e interpolación lineal
+    (varispeed: el tono sigue a la velocidad).
+- Marcadores (D29): `Sequence::markers` y `MediaItem::markers`; `commands/marker_commands` (añadir, editar, borrar,
+  navegar). Snap del timeline incluye los marcadores.
+- Anidado (D30): medio `loki.nest` con `MediaItem::sequence`. `Project::sequenceContains` impide ciclos (al
+  insertar clips y en `validate`). `SequenceSnapshot::nested` lleva las secuencias anidadas; la fuente de video
+  crea una `SequenceVideoSource` hija (transparente) por clip anidado y la de audio una `SequenceAudioSource` hija.
+  - Composición con alfa recto: `render::compositeOver` (CPU) y el mismo cálculo en el shader. Con destino opaco
+    es idéntico a la fórmula anterior.
+  - `GlCompositor` compone por niveles: cada nivel de anidado tiene su par ping-pong; `Layer::nested` se renderiza
+    antes en el nivel siguiente y se muestrea como textura (format 3).
+- Capa de ajuste (D31): medio `loki.adjustment`; `Layer::adjustment` usa la imagen acumulada como origen
+  (format 4) con su grade, opacidad y modo de fusión, cubriendo el lienzo (`render::coverCanvas`).
+- Scopes (D32): `render::analyzeScopes` (puro) y `ui::ScopesPanel`. `VideoView::setFrameTap` lee el resultado del
+  compositor (≤ 10 por segundo) solo cuando el panel está visible; el análisis corre con QtConcurrent y descarta
+  imágenes intermedias.
+
 ## 8. Export
 
 Implementado en la Fase 10 (D22, D23), en el módulo `export` (namespace `loki::exporter`).

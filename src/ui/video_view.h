@@ -9,6 +9,9 @@
 #include <QOpenGLWindow>
 #include <QWidget>
 
+#include <QElapsedTimer>
+
+#include <functional>
 #include <memory>
 
 namespace loki::ui {
@@ -45,6 +48,9 @@ public:
     [[nodiscard]] const media::VideoFramePtr& frame() const noexcept;
     [[nodiscard]] bool rendererReady() const noexcept;
     [[nodiscard]] VideoWindow* window() const noexcept { return m_window; }
+    // Scopes (D32): after compositing a new picture, and while `wanted()` is true, the picture is
+    // read back and passed to `tap` (at most every `intervalMs`).
+    void setFrameTap(std::function<bool()> wanted, std::function<void(const QImage&)> tap, int intervalMs = 100);
 
 private:
     VideoWindow* m_window = nullptr; // owned by the container widget
@@ -71,6 +77,7 @@ public:
     [[nodiscard]] const media::VideoFramePtr& frame() const noexcept { return m_frame; }
     [[nodiscard]] const render::CompositePtr& composite() const noexcept { return m_composite; }
     [[nodiscard]] bool rendererReady() const noexcept { return m_ready; }
+    void setFrameTap(std::function<bool()> wanted, std::function<void(const QImage&)> tap, int intervalMs);
 
 protected:
     void initializeGL() override;
@@ -91,6 +98,10 @@ private:
     std::shared_ptr<const media::Waveform> m_waveform;
     Rational m_waveformPosition;
     bool m_ready = false;
+    std::function<bool()> m_tapWanted;
+    std::function<void(const QImage&)> m_tap;
+    int m_tapInterval = 100;
+    QElapsedTimer m_tapTimer;
 };
 
 } // namespace loki::ui

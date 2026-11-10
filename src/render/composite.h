@@ -12,6 +12,8 @@ namespace loki::render {
 
 using model::BlendMode;
 
+struct CompositeFrame;
+
 // One video layer of a composite, already resolved for a time (D11: no OpenGL here, so the same
 // description feeds the preview compositor and, in Phase 10, the export).
 struct Layer {
@@ -23,6 +25,16 @@ struct Layer {
     model::ClipTransform transform;
     LayerGrade grade; // color correction, LUT, dip to black (Phase 9)
     WipeMask wipe;    // wipe transition mask (canvas space)
+    // Nested sequence (D30): the picture is this composite (transparent where empty), rendered at
+    // sourceWidth x sourceHeight; `frame` is unused.
+    std::shared_ptr<const CompositeFrame> nested;
+    // Adjustment layer (D31): the picture is the composite below this layer, graded; covers the
+    // whole canvas (transform position/scale ignored, opacity and blend mode apply).
+    bool adjustment = false;
+
+    [[nodiscard]] bool hasPicture() const noexcept {
+        return adjustment || nested != nullptr || (frame && frame->planeCount > 0);
+    }
 };
 
 // Layers bottom (index 0, V1) to top, composited over black in a width x height canvas.
@@ -30,6 +42,9 @@ struct CompositeFrame {
     int width = 0;
     int height = 0;
     std::vector<Layer> layers;
+    // Nested composites start transparent (layers below show through, D30); the top level starts
+    // opaque black.
+    bool transparent = false;
 };
 
 using CompositePtr = std::shared_ptr<const CompositeFrame>;
@@ -51,5 +66,18 @@ using Rgb = std::array<float, 3>;
 [[nodiscard]] Rgb blendColor(BlendMode mode, const Rgb& src, const Rgb& dst) noexcept;
 // Full per-pixel composite step: mix(dst, blend(src, dst), opacity).
 [[nodiscard]] Rgb compositePixel(BlendMode mode, const Rgb& src, const Rgb& dst, float opacity) noexcept;
+
+// Straight-alpha color.
+struct Rgba {
+    Rgb rgb{0.0f, 0.0f, 0.0f};
+    float alpha = 0.0f;
+};
+// Composite step over a destination with alpha (nested sequences, D30): the blend mode only
+// applies where the destination is opaque, then `src` (coverage `alpha`) goes over it. With an
+// opaque destination this equals compositePixel. Identical to the GPU shader.
+[[nodiscard]] Rgba compositeOver(BlendMode mode, const Rgb& src, float alpha, const Rgba& dst) noexcept;
+
+// Canvas layer of an adjustment layer: identity transform covering width x height.
+void coverCanvas(Layer& layer, int width, int height) noexcept;
 
 } // namespace loki::render

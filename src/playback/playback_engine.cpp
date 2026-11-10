@@ -483,7 +483,7 @@ namespace {
 } // namespace
 
 void PlaybackEngine::cachePut(const TimedFrame& f) {
-    if (!f.frame) {
+    if (!f.frame && !(m_snapshot && f.composite)) { // nests/adjustments may have no decoded frame
         return;
     }
     if (m_snapshot) {

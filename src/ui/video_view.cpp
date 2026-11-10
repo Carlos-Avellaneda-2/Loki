@@ -73,6 +73,19 @@ void VideoWindow::releaseGl() {
     m_ready = false;
 }
 
+void VideoView::setFrameTap(std::function<bool()> wanted, std::function<void(const QImage&)> tap, int intervalMs) {
+    m_window->setFrameTap(std::move(wanted), std::move(tap), intervalMs);
+}
+
+void VideoWindow::setFrameTap(std::function<bool()> wanted, std::function<void(const QImage&)> tap, int intervalMs) {
+    m_tapWanted = std::move(wanted);
+    m_tap = std::move(tap);
+    m_tapInterval = intervalMs;
+    m_tapTimer.invalidate();
+    m_rendered.reset(); // re-render (and tap) the current picture
+    update();
+}
+
 void VideoWindow::setComposite(render::CompositePtr composite) {
     if (composite == m_composite && !m_frame && !m_waveform) {
         return;
@@ -152,6 +165,11 @@ void VideoWindow::paintGL() {
             m_rendered = m_composite;
             m_renderedWidth = fw;
             m_renderedHeight = fh;
+            if (m_tap && m_tapWanted && m_tapWanted() &&
+                (!m_tapTimer.isValid() || m_tapTimer.elapsed() >= m_tapInterval)) {
+                m_tapTimer.start();
+                m_tap(m_compositor.readback());
+            }
         }
         m_compositor.present(defaultFramebufferObject(), w, h);
         return;

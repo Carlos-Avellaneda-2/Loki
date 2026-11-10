@@ -1,4 +1,4 @@
-# Formato de proyecto `.loki` (versión 2)
+# Formato de proyecto `.loki` (versión 3)
 
 Archivo JSON en UTF-8. Lo escribe `model::saveProjectFile` y lo lee `model::loadProjectFile`
 (`src/model/project_json.*`).
@@ -84,6 +84,7 @@ Si algo falla se lanza `ProjectFormatError` con la ruta JSON del problema, por e
   3. Añadir un archivo "golden" de la versión anterior en `tests/data/` con su test.
 - `tests/data/project_v1.loki` es el golden de la versión 1 y debe seguir abriendo siempre.
 - `tests/data/project_v2.loki` es el golden de la versión 2.
+- `tests/data/project_v3.loki` es el golden de la versión 3.
 
 ## Versión 2 (Fase 9, D19–D20)
 
@@ -103,3 +104,22 @@ La migración de v1 a v2 no cambia nada: un documento v1 ya es un v2 válido. To
   - `type`: `loki.crossDissolve`, `loki.dipToBlack`, `loki.wipe` o `loki.crossfade` (audio).
   - Una transición cuyos clips ya no existen o ya no se tocan queda inactiva y se ignora. Las ediciones del
     timeline la borran en el mismo paso de deshacer.
+
+## Versión 3 (Fase 13, D28–D31)
+
+La migración de v2 a v3 no cambia nada: todo lo nuevo es opcional.
+
+- Clip:
+  - `"speed": [num, den]`: segundos de origen por segundo de secuencia (`[1, 2]` = 50 %). Se omite en 100 %.
+    `[0, 1]` es un cuadro congelado (Frame Hold) en `sourceIn`. Máximo 100 (10000 %).
+  - `"reverse": true`: recorre `[sourceIn, sourceIn + duration × speed)` hacia atrás. Se omite si es falso.
+  - Los keyframes siguen en tiempo del origen.
+- Marcadores: `"markers": [{ "id", "time", "duration"?, "name"?, "comment"?, "color" }]`, ordenados por `time`.
+  - En la secuencia: tiempo de la secuencia. En un medio (marcadores de clip): tiempo del origen.
+  - `color`: 0 verde, 1 rojo, 2 violeta, 3 naranja, 4 amarillo, 5 blanco, 6 azul, 7 cian.
+- Medios generados nuevos:
+  - `"generator": "loki.nest"` con `"sequence": "<id>"`: una secuencia anidada. La secuencia debe existir, y
+    ninguna secuencia puede contenerse a sí misma (directa o indirectamente).
+  - `"generator": "loki.adjustment"`: capa de ajuste; sus efectos de color se aplican a las pistas de abajo.
+- Una secuencia usada por un medio `loki.nest` no se puede borrar sin borrar antes ese medio.
+

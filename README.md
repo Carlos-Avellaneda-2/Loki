@@ -52,10 +52,12 @@ pestaña del panel). Window muestra u oculta cada panel.
 | **Effect Controls** | Parámetros y keyframes del clip o la transición seleccionada. |
 | **Audio Track Mixer** | Fader, paneo, mute y solo de cada pista, y el master. |
 | **Audio Meters** | Nivel de lo que suena (pico y RMS). |
+| **Markers** | Lista de los marcadores de la secuencia. |
+| **Lumetri Scopes** | Waveform, RGB parade, vectorscopio e histograma del monitor de programa. |
 
 **Workspaces:** Window > Workspaces.
 - **Editing**: el montaje general.
-- **Color**: monitor de programa grande con Effect Controls al lado.
+- **Color**: monitor de programa grande con Effect Controls y los scopes al lado.
 - **Audio**: el mezclador a la vista.
 - **Save as New Workspace…** guarda tu propia disposición; **Delete Workspace** la borra.
 
@@ -162,6 +164,7 @@ Haz clic o arrastra en la regla para mover el cabezal.
 | N | Roll | Mover el punto de corte entre dos clips vecinos |
 | Y | Slip | Cambiar qué parte del medio se ve, sin mover el clip |
 | U | Slide | Mover un clip entre sus vecinos, que se ajustan |
+| R | Rate Stretch | Arrastrar un borde cambia la velocidad en vez del contenido |
 
 Los botones de herramienta están arriba a la derecha del timeline.
 - Arrastrar con la herramienta Selección mueve los clips vinculados (video y su audio) juntos. Con Alt arrastras
@@ -184,7 +187,57 @@ Los botones de herramienta están arriba a la derecha del timeline.
 | ; | Lift: quitar el tramo In–Out dejando hueco |
 | ' | Extract: quitar el tramo In–Out cerrando el hueco |
 
-Clic derecho sobre un clip ofrece Enable/Disable, Delete, Ripple Delete, Link/Unlink, Copy, Cut y Paste.
+Clic derecho sobre un clip ofrece Enable/Disable, Delete, Ripple Delete, Speed/Duration, Add Frame Hold, Nest,
+Link/Unlink, Copy, Cut y Paste.
+
+### Velocidad, reversa y congelar cuadro
+
+| Atajo | Acción |
+|---|---|
+| Ctrl+R | **Speed/Duration…**: velocidad en %, duración, reversa y ripple |
+| R | Herramienta **Rate Stretch**: arrastra el borde de un clip para hacerlo más lento o más rápido |
+| Shift+H | **Add Frame Hold**: desde el cabezal, el clip de video se queda congelado en ese cuadro |
+
+- 50 % es cámara lenta; 200 % es el doble de rápido. El contenido no cambia: cambia cuánto dura.
+- Sin **Ripple Edit**, un clip más lento se corta al llegar al siguiente. Con ripple, empuja lo que sigue en su
+  pista.
+- **Reverse Speed** reproduce el clip al revés.
+- El audio sigue la velocidad y cambia de tono (más rápido = más agudo). El audio de un cuadro congelado es silencio.
+- El clip muestra su velocidad en el nombre, p. ej. `[50%]`, `[-100%]` (reversa) o `[Frame Hold]`.
+
+### Marcadores
+
+| Atajo | Acción |
+|---|---|
+| M | Marcador en el cabezal (en el monitor de origen: marcador del clip) |
+| Shift+M / Ctrl+Shift+M | Ir al marcador siguiente / anterior |
+| Ctrl+Alt+M | Borrar el marcador del cabezal |
+
+- Los marcadores de la secuencia se ven en la regla del timeline. Doble clic en uno abre su ficha: nombre,
+  comentario, color y duración (un marcador con duración marca un tramo).
+- Los marcadores de clip se ponen en el monitor de origen y se ven como triangulitos en cada clip de ese medio.
+- El panel **Markers** los lista. Doble clic salta a uno; **Edit…** y **Delete** actúan sobre el elegido.
+- Las ediciones se pegan (snap) a los marcadores.
+- Sequence > Clear All Markers borra todos los de la secuencia.
+
+### Anidar secuencias
+
+1. Selecciona clips y elige Clip > Nest… (o clic derecho > Nest…). Ponle nombre.
+2. Los clips pasan a una secuencia nueva y en su lugar queda un solo clip **anidado** (video y audio vinculados).
+3. Doble clic en el clip anidado abre esa secuencia. Vuelve con el selector de secuencias del timeline.
+
+- Lo que cambies dentro se ve en todas partes donde está anidada.
+- Al clip anidado se le aplican Motion, Opacity, efectos y velocidad como a cualquier clip. Donde la secuencia de
+  adentro no tiene nada, se ven las pistas de abajo.
+- Una secuencia no puede contenerse a sí misma.
+- Sequence > Delete Sequence sobre una secuencia anidada borra también su clip anidado (se puede deshacer).
+
+### Capas de ajuste
+
+Sequence > Add Adjustment Layer pone una **capa de ajuste** en el cabezal, en la primera pista libre por encima de
+la pista destino. Los efectos de color que le pongas (Color Correction, LUT) se aplican a todo lo que está debajo
+mientras dure la capa. Su **Opacity** mezcla el efecto y su modo de fusión también funciona. Motion no se aplica
+a la capa de ajuste.
 
 ### Atajos personalizados
 
@@ -197,6 +250,18 @@ tecla, el diálogo lo marca y no deja guardar. **Restore Defaults** vuelve a los
 - **Full / 1/2 / 1/4**: resolución de la vista previa. Bájala si se pierden fotogramas; no afecta a la exportación.
 - **Proxy**: cambia entre los proxies y los originales (sección 10).
 - Las teclas I, O, ; y ' también funcionan con el foco en este monitor.
+
+### Scopes (Lumetri Scopes)
+
+Window > Lumetri Scopes (en el workspace **Color** está al lado del monitor). Elige el scope arriba:
+- **Waveform (Luma)**: el brillo de cada columna de la imagen, de 0 (negro) a 100 (blanco).
+- **RGB Parade**: lo mismo por canal rojo, verde y azul, uno al lado del otro.
+- **Vectorscope YUV**: el color. Lejos del centro = más saturado. Los cuadros marcan los colores de las barras al
+  75 % y la línea punteada, el tono de piel.
+- **Histogram**: cuántos píxeles hay de cada nivel en cada canal.
+
+Los scopes leen lo que muestra el monitor de programa unas 10 veces por segundo y solo mientras el panel está
+visible, así que no frenan la reproducción.
 
 ## 7. Efectos de video, color y títulos
 

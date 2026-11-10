@@ -61,6 +61,7 @@ TimelinePanel::TimelinePanel(ProjectController& controller, MediaServices& servi
         {Tool::Razor, {tr("Razor"), tr("Razor Tool (C) - Shift+click cuts all tracks")}},
         {Tool::Slip, {tr("Slip"), tr("Slip Tool (Y): change the source range, keep position")}},
         {Tool::Slide, {tr("Slide"), tr("Slide Tool (U): move a clip between its neighbours")}},
+        {Tool::RateStretch, {tr("Stretch"), tr("Rate Stretch Tool (R): drag an edge to change the speed")}},
     };
     for (const auto& [tool, labels] : tools) {
         auto* b = toolButton(labels.first, labels.second);
@@ -185,6 +186,16 @@ void TimelinePanel::registerShortcuts(ShortcutManager& s) {
     add("tool.roll", tr("Rolling Edit Tool"), QKeySequence(Qt::Key_N), [v] { v->setTool(Tool::Roll); });
     add("tool.slip", tr("Slip Tool"), QKeySequence(Qt::Key_Y), [v] { v->setTool(Tool::Slip); });
     add("tool.slide", tr("Slide Tool"), QKeySequence(Qt::Key_U), [v] { v->setTool(Tool::Slide); });
+    add("tool.rateStretch", tr("Rate Stretch Tool"), QKeySequence(Qt::Key_R), [v] { v->setTool(Tool::RateStretch); });
+    add("speedDuration", tr("Speed/Duration..."), QKeySequence(Qt::CTRL | Qt::Key_R), [v] { v->speedDuration(); });
+    add("frameHold", tr("Add Frame Hold"), QKeySequence(Qt::SHIFT | Qt::Key_H), [v] { v->addFrameHold(); });
+    add("nest", tr("Nest..."), QKeySequence(), [v] { v->nestSelection(); });
+    add("addMarker", tr("Add Marker"), QKeySequence(Qt::Key_M), [v] { v->addMarker(); });
+    add("nextMarker", tr("Go to Next Marker"), QKeySequence(Qt::SHIFT | Qt::Key_M), [v] { v->goToMarker(true); });
+    add("prevMarker", tr("Go to Previous Marker"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M),
+        [v] { v->goToMarker(false); });
+    add("clearMarker", tr("Clear Current Marker"), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_M),
+        [v] { v->clearMarkerAtPlayhead(); });
     add("snap", tr("Snap in Timeline"), QKeySequence(Qt::Key_S), [v] { v->setSnapping(!v->snapping()); });
     add("delete", tr("Clear (Delete)"), QKeySequence(Qt::Key_Delete), [v] { v->deleteSelection(); });
     add("delete.alt", tr("Clear (Backspace)"), QKeySequence(Qt::Key_Backspace), [v] { v->deleteSelection(); });

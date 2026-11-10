@@ -67,4 +67,32 @@ Rgb compositePixel(BlendMode mode, const Rgb& src, const Rgb& dst, float opacity
     return {dst[0] + (blended[0] - dst[0]) * a, dst[1] + (blended[1] - dst[1]) * a, dst[2] + (blended[2] - dst[2]) * a};
 }
 
+Rgba compositeOver(BlendMode mode, const Rgb& src, float alpha, const Rgba& dst) noexcept {
+    const float a = std::clamp(alpha, 0.0f, 1.0f);
+    const float da = std::clamp(dst.alpha, 0.0f, 1.0f);
+    const auto b = blendColor(mode, src, dst.rgb);
+    const float outA = a + da * (1.0f - a);
+    Rgba out;
+    out.alpha = outA;
+    if (outA <= 0.0f) {
+        return out;
+    }
+    for (std::size_t c = 0; c < 3; ++c) {
+        const float blended = src[c] + (b[c] - src[c]) * da;
+        out.rgb[c] = (blended * a + dst.rgb[c] * da * (1.0f - a)) / outA;
+    }
+    return out;
+}
+
+void coverCanvas(Layer& layer, int width, int height) noexcept {
+    layer.sourceWidth = width;
+    layer.sourceHeight = height;
+    layer.transform.positionX = width / 2.0;
+    layer.transform.positionY = height / 2.0;
+    layer.transform.anchorX = width / 2.0;
+    layer.transform.anchorY = height / 2.0;
+    layer.transform.scale = 100.0;
+    layer.transform.rotation = 0.0;
+}
+
 } // namespace loki::render

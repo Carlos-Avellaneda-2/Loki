@@ -27,6 +27,8 @@ class SourceMonitorPanel;
 class ShortcutManager;
 class ProgramMonitorPanel;
 class EffectControlsPanel;
+class MarkersPanel;
+class ScopesPanel;
 namespace timeline {
 class TimelinePanel;
 } // namespace timeline
@@ -47,7 +49,7 @@ class MainWindow final : public QMainWindow {
 
 public:
     // Bump when the default panel set changes so stale saved layouts are ignored.
-    static constexpr int kLayoutVersion = 3; // 2: Audio Track Mixer panel, 3: Effects panel
+    static constexpr int kLayoutVersion = 4; // 2: Audio Track Mixer, 3: Effects, 4: Markers + Scopes
 
     // playbackOptions: tests inject a fake audio device / clock.
     explicit MainWindow(QWidget* parent = nullptr, playback::PlaybackOptions playbackOptions = {});
@@ -79,6 +81,12 @@ public:
     [[nodiscard]] ui::AudioMetersPanel* audioMeters() const noexcept { return m_audioMeters; }
     [[nodiscard]] ui::AudioMixerPanel* audioMixer() const noexcept { return m_audioMixer; }
     [[nodiscard]] ui::EffectsPanel* effectsPanel() const noexcept { return m_effects; }
+    [[nodiscard]] ui::MarkersPanel* markersPanel() const noexcept { return m_markers; }
+    [[nodiscard]] ui::ScopesPanel* scopesPanel() const noexcept { return m_scopes; }
+    // Sequence > Add Adjustment Layer (D31): at the playhead, above the targeted video track.
+    void newAdjustmentLayer();
+    // Sequence > Delete Sequence: also removes nested-sequence items that show it (D30).
+    bool deleteSequence(model::SequenceId id);
     [[nodiscard]] QAction* proxyAction() const noexcept { return m_proxyAction; }
     // File > New > Title: a title clip at the Program playhead on the targeted video track.
     void newTitle();
@@ -110,6 +118,8 @@ private:
     void showAllPanels();
     QWidget* createPanelWidget(ui::PanelId id);
     void activateFirstSequence();
+    // Places a new generated item (title, adjustment layer) at the Program playhead.
+    void placeGenerated(std::string_view generator, const std::string& name);
 public:
     // Shows `id` in the Timeline, Program Monitor and mixer.
     void setActiveSequence(model::SequenceId id);
@@ -138,6 +148,8 @@ private:
     ui::ProgramMonitorPanel* m_programMonitor = nullptr; // owned by its dock widget
     ui::EffectControlsPanel* m_effectControls = nullptr; // owned by its dock widget
     ui::timeline::TimelinePanel* m_timeline = nullptr;  // owned by its dock widget
+    ui::MarkersPanel* m_markers = nullptr;              // owned by its dock widget
+    ui::ScopesPanel* m_scopes = nullptr;                // owned by its dock widget
     ui::AudioMetersPanel* m_audioMeters = nullptr;      // owned by its dock widget
     ui::AudioMixerPanel* m_audioMixer = nullptr;        // owned by its dock widget
     ui::EffectsPanel* m_effects = nullptr;              // owned by its dock widget

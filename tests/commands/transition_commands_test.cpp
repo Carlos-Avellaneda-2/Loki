@@ -137,7 +137,7 @@ TEST_F(TransitionTest, TitlesEffectsAndTextParametersRoundTripInVersion2) {
     EXPECT_THROW((void)applyEffect(project, a, kMotionEffect), CommandError);  // fixed
     stack.push(makeApplyTransition(project, a, ClipEdge::Out, kDipToBlack));
     const auto json = serializeProject(project);
-    EXPECT_NE(json.find("\"version\": 2"), std::string::npos);
+    EXPECT_NE(json.find("\"version\": " + std::to_string(kProjectFormatVersion)), std::string::npos);
     EXPECT_EQ(parseProject(json), project);
     stack.undo(); // transition
     stack.undo(); // LUT file

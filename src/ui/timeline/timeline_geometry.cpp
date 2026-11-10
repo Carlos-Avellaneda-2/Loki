@@ -74,6 +74,9 @@ Hit hitTest(const model::Sequence& sequence, const std::vector<TrackRow>& rows, 
 std::vector<Rational> snapCandidates(const model::Sequence& sequence, const Rational& playhead,
                                      const std::set<model::ClipId>& exclude) {
     std::vector<Rational> out{Rational(), playhead};
+    for (const auto& m : sequence.markers) { // D29: edits snap to sequence markers
+        out.push_back(m.time);
+    }
     for (const auto* list : {&sequence.videoTracks, &sequence.audioTracks}) {
         for (const auto& t : *list) {
             for (const auto& c : t.clips) {

@@ -120,6 +120,8 @@ struct SequenceSnapshot {
     std::unordered_map<model::MediaId, model::MediaItem> media;
     std::uint64_t generation = 0; // changes with every edit (frame cache key)
     bool useProxies = false;      // preview only (D24); export always reads the originals
+    // Sequences nested in this one (D30), each with the media it uses (and its own nested ones).
+    std::unordered_map<model::SequenceId, std::shared_ptr<const SequenceSnapshot>> nested;
 };
 
 // File to decode pictures from: the proxy when enabled and present, else the original.
@@ -140,9 +142,16 @@ public:
     std::optional<TimedFrame> nextFrame() override;
     std::vector<TimedFrame> framesUpTo(const Rational& t) override;
     void setMaxSize(int maxWidth, int maxHeight) override;
+    // Composite at `t` without parallel prefetch (nested sequences, D30); null past the end.
+    render::CompositePtr compositeAt(const Rational& t);
+    // Nested sequences composite over transparency instead of black.
+    void setTransparent(bool transparent) noexcept { m_transparent = transparent; }
 
 private:
     media::VideoDecoder* decoderFor(const model::Clip& clip, const model::MediaItem& media);
+    SequenceVideoSource* nestedSourceFor(const model::Clip& clip, const model::MediaItem& media);
+    // Decoded picture of a file clip at `sourceTime`; reversed clips read runs backwards (D28).
+    media::VideoFramePtr decodedFrame(const model::Clip& clip, const model::MediaItem& media, const Rational& sourceTime);
     // Picture of `clip` at sequence time `t` with Motion/Opacity, color, LUT resolved. `t` may be
     // outside the clip (transition handles): the source time is clamped (freeze frame, D19).
     std::optional<render::Layer> layerFor(const model::Clip& clip, const Rational& t);
@@ -170,6 +179,9 @@ private:
     };
     std::unordered_map<model::ClipId, CachedTitle> m_titles;
     std::unordered_map<std::string, std::shared_ptr<const render::Lut3D>> m_luts; // null = failed to load
+    std::list<std::pair<model::ClipId, std::unique_ptr<SequenceVideoSource>>> m_nested; // LRU
+    std::unordered_map<model::ClipId, std::vector<media::VideoFramePtr>> m_reverseRuns;
+    bool m_transparent = false;
 };
 
 // Copies a sequence and the media its clips use (null if the sequence does not exist).
@@ -195,9 +207,19 @@ public:
 
 private:
     struct ClipReader {
-        std::unique_ptr<media::AudioDecoder> decoder;
-        std::int64_t nextFrame = -1; // sequence frame the decoder is positioned at
+        std::unique_ptr<AudioSource> source; // a file, or a nested sequence (D30)
+        std::int64_t nextFrame = -1;         // sequence frame the source is positioned at (100 %)
+        // Retimed clips (D28): decoded source frames [windowStart, windowStart + window/ch) and the
+        // source frame the source reads next.
+        std::vector<float> window;
+        std::int64_t windowStart = 0;
+        std::int64_t readPos = -1;
     };
+
+    // Fills m_scratch with `count` frames of a retimed clip starting at sequence frame `segStart`
+    // (varispeed by linear interpolation: pitch follows the speed). Returns frames produced.
+    std::size_t readRetimed(ClipReader& reader, const model::Clip& clip, std::int64_t segStart, std::size_t count);
+    void ensureWindow(ClipReader& reader, std::int64_t lo, std::int64_t hi, bool backwards);
 
     void mixClip(const model::Clip& clip, const model::MediaItem& media, std::int64_t segStart, std::int64_t segEnd,
                  std::int64_t blockStart, float* bus, const std::vector<model::TransitionSpan>& spans);

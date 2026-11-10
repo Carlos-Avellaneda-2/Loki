@@ -9,7 +9,9 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <cmath>
 #include <future>
+#include <stdexcept>
 
 namespace loki::playback {
 
@@ -175,7 +177,9 @@ media::VideoFramePtr SequenceVideoSource::titleFrame(const model::Clip& clip, co
 
 Rational SequenceVideoSource::sourceTimeFor(const model::Clip& clip, const model::MediaItem& media,
                                             const Rational& t) const {
-    Rational sourceTime = max(Rational(), clip.toSourceTime(t));
+    // A reversed clip shows, for the frame [t, t + frame), the source picture at its far end.
+    Rational sourceTime = max(Rational(), clip.reverse ? max(clip.sourceIn, clip.toSourceTime(t + m_frameDuration))
+                                                       : clip.toSourceTime(t));
     if (!media.isGenerated() && !media.info.isStill && media.info.duration.isPositive() &&
         sourceTime >= media.info.duration) {
         sourceTime = max(Rational(), media.info.duration - m_frameDuration); // freeze the last frame
@@ -186,7 +190,7 @@ Rational SequenceVideoSource::sourceTimeFor(const model::Clip& clip, const model
 void SequenceVideoSource::prefetch(const Rational& t) {
     std::vector<std::pair<media::VideoDecoder*, Rational>> work;
     const auto want = [&](const model::Clip* clip) {
-        if (clip == nullptr || !clip->enabled) {
+        if (clip == nullptr || !clip->enabled || clip->reverse) { // reversed clips decode runs (decodedFrame)
             return;
         }
         const auto media = m_snapshot->media.find(clip->media);
@@ -230,6 +234,65 @@ void SequenceVideoSource::prefetch(const Rational& t) {
     }
 }
 
+SequenceVideoSource* SequenceVideoSource::nestedSourceFor(const model::Clip& clip, const model::MediaItem& media) {
+    for (auto it = m_nested.begin(); it != m_nested.end(); ++it) {
+        if (it->first == clip.id) {
+            m_nested.splice(m_nested.begin(), m_nested, it);
+            return m_nested.front().second.get();
+        }
+    }
+    const auto nested = m_snapshot->nested.find(media.sequence);
+    if (nested == m_snapshot->nested.end() || !nested->second) {
+        return nullptr;
+    }
+    auto snapshot = std::make_shared<SequenceSnapshot>(*nested->second);
+    snapshot->useProxies = m_snapshot->useProxies;
+    auto source = std::make_unique<SequenceVideoSource>(std::move(snapshot), m_allowHardware, m_maxWidth, m_maxHeight,
+                                                        m_maxDecoders, false);
+    source->setTransparent(true);
+    m_nested.emplace_front(clip.id, std::move(source));
+    constexpr std::size_t kMaxNestedSources = 4;
+    if (m_nested.size() > kMaxNestedSources) {
+        m_nested.pop_back();
+    }
+    return m_nested.front().second.get();
+}
+
+media::VideoFramePtr SequenceVideoSource::decodedFrame(const model::Clip& clip, const model::MediaItem& media,
+                                                       const Rational& sourceTime) {
+    auto* decoder = decoderFor(clip, media);
+    if (decoder == nullptr) {
+        return nullptr;
+    }
+    if (!clip.reverse || media.info.isStill) {
+        return decoder->frameAt(sourceTime);
+    }
+    // Backwards: keep the run decoded from the previous keyframe and serve earlier frames from it.
+    const auto find = [&](const std::vector<media::VideoFramePtr>& run) -> media::VideoFramePtr {
+        for (auto it = run.rbegin(); it != run.rend(); ++it) {
+            if ((*it)->pts <= sourceTime) {
+                return sourceTime < (*it)->pts + (*it)->duration ? *it : nullptr;
+            }
+        }
+        return nullptr;
+    };
+    auto& run = m_reverseRuns[clip.id];
+    if (auto f = find(run)) {
+        return f;
+    }
+    run = decoder->framesUpTo(sourceTime);
+    constexpr std::size_t kKeptFrames = 24; // bounds memory with long GOPs
+    if (run.size() > kKeptFrames) {
+        run.erase(run.begin(), run.end() - static_cast<std::ptrdiff_t>(kKeptFrames));
+    }
+    return run.empty() ? nullptr : run.back();
+}
+
+render::CompositePtr SequenceVideoSource::compositeAt(const Rational& t) {
+    auto f = compose(t, false);
+    return f ? f->composite : nullptr;
+}
+
 std::optional<render::Layer> SequenceVideoSource::layerFor(const model::Clip& clip, const Rational& t) {
     if (!clip.enabled) {
         return std::nullopt;
@@ -246,21 +309,30 @@ std::optional<render::Layer> SequenceVideoSource::layerFor(const model::Clip& cl
         layer.frame = titleFrame(clip, sourceTime);
         layer.sourceWidth = seq.settings.width;
         layer.sourceHeight = seq.settings.height;
-    } else {
-        auto* decoder = decoderFor(clip, media);
-        if (decoder == nullptr) {
+    } else if (media.isAdjustment()) {
+        layer.adjustment = true;
+    } else if (media.isNest()) {
+        auto* nested = nestedSourceFor(clip, media);
+        layer.nested = nested != nullptr ? nested->compositeAt(sourceTime) : nullptr;
+        if (!layer.nested) {
             return std::nullopt;
         }
-        layer.frame = decoder->frameAt(sourceTime);
+        layer.sourceWidth = layer.nested->width;
+        layer.sourceHeight = layer.nested->height;
+    } else {
+        layer.frame = decodedFrame(clip, media, sourceTime);
         if (layer.frame) {
             layer.sourceWidth = media.info.width > 0 ? media.info.width : layer.frame->width;
             layer.sourceHeight = media.info.height > 0 ? media.info.height : layer.frame->height;
         }
     }
-    if (!layer.frame) {
+    if (!layer.hasPicture()) {
         return std::nullopt;
     }
     layer.transform = model::resolveTransform(clip, sourceTime, media.info, seq.settings);
+    if (layer.adjustment) {
+        render::coverCanvas(layer, seq.settings.width, seq.settings.height); // D31: Motion is not applied
+    }
     if (const auto* color = model::findEffectByType(clip, model::kColorEffect); color != nullptr && color->enabled) {
         const auto v = [&](const char* key) {
             return static_cast<float>(model::effectiveValue(clip, model::kColorEffect, key, sourceTime, media.info, seq.settings));
@@ -296,6 +368,7 @@ std::optional<TimedFrame> SequenceVideoSource::compose(const Rational& requested
     auto composite = std::make_shared<render::CompositeFrame>();
     composite->width = seq.settings.width;
     composite->height = seq.settings.height;
+    composite->transparent = m_transparent;
     const auto push = [&](std::optional<render::Layer> layer) {
         if (layer) {
             composite->layers.push_back(std::move(*layer));
@@ -351,7 +424,9 @@ std::optional<TimedFrame> SequenceVideoSource::compose(const Rational& requested
     }
     TimedFrame result{t, m_frameDuration, nullptr, nullptr};
     if (!composite->layers.empty()) {
-        result.frame = composite->layers.back().frame;
+        for (auto it = composite->layers.rbegin(); it != composite->layers.rend() && !result.frame; ++it) {
+            result.frame = it->frame; // topmost decoded picture (may be none: nests, adjustments)
+        }
         result.composite = std::move(composite);
     }
     return result;
@@ -389,14 +464,21 @@ void SequenceVideoSource::setMaxSize(int maxWidth, int maxHeight) {
     for (auto& [id, decoder] : m_decoders) {
         decoder->setMaxSize(maxWidth, maxHeight);
     }
+    for (auto& [id, nested] : m_nested) {
+        nested->setMaxSize(maxWidth, maxHeight);
+    }
+    m_reverseRuns.clear();
 }
 
 // --- SequenceAudioSource -----------------------------------------------------------------------
 
-std::shared_ptr<SequenceSnapshot> makeSnapshot(const model::Project& project, model::SequenceId id,
-                                               std::uint64_t generation) {
+namespace {
+
+std::shared_ptr<SequenceSnapshot> snapshotOf(const model::Project& project, model::SequenceId id, std::uint64_t generation,
+                                             int depth) {
     const auto* seq = project.findSequence(id);
-    if (seq == nullptr) {
+    constexpr int kMaxDepth = 16; // the model forbids cycles; this only bounds the work
+    if (seq == nullptr || depth > kMaxDepth) {
         return nullptr;
     }
     auto snapshot = std::make_shared<SequenceSnapshot>();
@@ -404,10 +486,16 @@ std::shared_ptr<SequenceSnapshot> makeSnapshot(const model::Project& project, mo
     for (const auto* list : {&seq->videoTracks, &seq->audioTracks}) {
         for (const auto& track : *list) {
             for (const auto& clip : track.clips) {
-                if (!snapshot->media.contains(clip.media)) {
-                    if (const auto* media = project.findMedia(clip.media)) {
-                        snapshot->media.emplace(clip.media, *media);
-                    }
+                if (snapshot->media.contains(clip.media)) {
+                    continue;
+                }
+                const auto* media = project.findMedia(clip.media);
+                if (media == nullptr) {
+                    continue;
+                }
+                snapshot->media.emplace(clip.media, *media);
+                if (media->isNest() && !snapshot->nested.contains(media->sequence)) {
+                    snapshot->nested.emplace(media->sequence, snapshotOf(project, media->sequence, generation, depth + 1));
                 }
             }
         }
@@ -416,8 +504,32 @@ std::shared_ptr<SequenceSnapshot> makeSnapshot(const model::Project& project, mo
     return snapshot;
 }
 
+bool sameNested(const SequenceSnapshot& a, const SequenceSnapshot& b) {
+    if (a.nested.size() != b.nested.size()) {
+        return false;
+    }
+    for (const auto& [id, nested] : a.nested) {
+        const auto other = b.nested.find(id);
+        if (other == b.nested.end() || !nested != !other->second) {
+            return false;
+        }
+        if (nested && (nested->sequence != other->second->sequence || nested->media != other->second->media ||
+                       !sameNested(*nested, *other->second))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+std::shared_ptr<SequenceSnapshot> makeSnapshot(const model::Project& project, model::SequenceId id,
+                                               std::uint64_t generation) {
+    return snapshotOf(project, id, generation, 0);
+}
+
 bool sameExceptAudioMix(const SequenceSnapshot& a, const SequenceSnapshot& b) {
-    if (a.media != b.media) {
+    if (a.media != b.media || !sameNested(a, b)) {
         return false;
     }
     const auto normalized = [](model::Sequence seq) {
@@ -469,9 +581,17 @@ void SequenceAudioSource::mixClip(const model::Clip& clip, const model::MediaIte
                                   std::int64_t segEnd, std::int64_t blockStart, float* bus,
                                   const std::vector<model::TransitionSpan>& spans) {
     auto& reader = m_readers[clip.id];
-    if (!reader.decoder) {
+    if (!reader.source) {
         try {
-            reader.decoder = std::make_unique<media::AudioDecoder>(media.path, m_rate, m_channels);
+            if (media.isNest()) {
+                const auto nested = m_snapshot->nested.find(media.sequence);
+                if (nested == m_snapshot->nested.end() || !nested->second) {
+                    throw std::runtime_error("nested sequence missing");
+                }
+                reader.source = std::make_unique<SequenceAudioSource>(nested->second, m_rate, m_channels);
+            } else {
+                reader.source = std::make_unique<FileAudioSource>(media.path, m_rate, m_channels);
+            }
         } catch (const std::exception& e) {
             spdlog::warn("Audio offline for playback ({}): {}", model::pathToUtf8(media.path), e.what());
             m_offline.insert(clip.media);
@@ -479,13 +599,18 @@ void SequenceAudioSource::mixClip(const model::Clip& clip, const model::MediaIte
             return;
         }
     }
-    if (reader.nextFrame != segStart) {
-        reader.decoder->seek(clip.toSourceTime(Rational(segStart, m_rate)));
-    }
     const auto ch = static_cast<std::size_t>(m_channels);
     const auto count = static_cast<std::size_t>(segEnd - segStart);
     m_scratch.assign(count * ch, 0.0f);
-    const auto got = static_cast<std::int64_t>(reader.decoder->read(m_scratch.data(), count));
+    std::int64_t got = 0;
+    if (clip.isRetimed()) {
+        got = static_cast<std::int64_t>(readRetimed(reader, clip, segStart, count));
+    } else {
+        if (reader.nextFrame != segStart) {
+            reader.source->seek(clip.toSourceTime(Rational(segStart, m_rate)));
+        }
+        got = static_cast<std::int64_t>(reader.source->read(m_scratch.data(), count));
+    }
     reader.nextFrame = segEnd;
 
     const bool mono = media.info.audioChannels == 1;
@@ -519,6 +644,81 @@ void SequenceAudioSource::mixClip(const model::Clip& clip, const model::MediaIte
                        static_cast<std::size_t>(stepEnd - f), m_channels, from, to);
         from = to;
     }
+}
+
+void SequenceAudioSource::ensureWindow(ClipReader& reader, std::int64_t lo, std::int64_t hi, bool backwards) {
+    const auto ch = static_cast<std::int64_t>(m_channels);
+    const std::int64_t have = static_cast<std::int64_t>(reader.window.size()) / ch;
+    if (lo >= reader.windowStart && hi <= reader.windowStart + have) {
+        return;
+    }
+    const std::int64_t chunk = std::max<std::int64_t>(hi - lo, m_rate / 2);
+    const auto readInto = [&](std::int64_t from, std::int64_t frames) {
+        const auto old = reader.window.size();
+        reader.window.resize(old + static_cast<std::size_t>(frames * ch), 0.0f);
+        const auto got = static_cast<std::int64_t>(reader.source->read(reader.window.data() + old, static_cast<std::size_t>(frames)));
+        reader.window.resize(old + static_cast<std::size_t>(got * ch)); // past the end: shorter
+        reader.readPos = from + got;
+        return got;
+    };
+    const std::int64_t windowEnd = reader.windowStart + have;
+    if (!backwards && reader.readPos == windowEnd && lo >= reader.windowStart && lo <= windowEnd) {
+        // Forward and contiguous: keep reading, drop what is behind `lo`.
+        const auto drop = static_cast<std::size_t>((lo - reader.windowStart) * ch);
+        reader.window.erase(reader.window.begin(), reader.window.begin() + static_cast<std::ptrdiff_t>(drop));
+        reader.windowStart = lo;
+        if (readInto(windowEnd, std::max<std::int64_t>(hi - windowEnd, chunk)) == 0) {
+            reader.readPos = -1; // end of the source: the next call re-seeks
+        }
+        return;
+    }
+    // Jump: forwards, read from `lo`; backwards, read a chunk ending at `hi` (later blocks go lower).
+    const std::int64_t start = backwards ? std::max<std::int64_t>(0, hi - chunk) : lo;
+    reader.window.clear();
+    reader.windowStart = start;
+    reader.source->seek(Rational(start, m_rate));
+    readInto(start, std::max<std::int64_t>(hi - start, chunk));
+}
+
+std::size_t SequenceAudioSource::readRetimed(ClipReader& reader, const model::Clip& clip, std::int64_t segStart,
+                                             std::size_t count) {
+    if (clip.speed.isZero()) {
+        return count; // Frame Hold: silence (m_scratch is already zero)
+    }
+    const auto ch = static_cast<std::size_t>(m_channels);
+    const double speed = clip.speed.toDouble();
+    const double rate = m_rate;
+    const double clipStart = clip.start.toDouble() * rate;
+    const double sourceIn = clip.sourceIn.toDouble() * rate;
+    const double sourceOut = clip.sourceOut().toDouble() * rate;
+    // Source position (in frames at the output rate) of output frame f.
+    const auto position = [&](double f) {
+        const double offset = (f - clipStart) * speed;
+        return clip.reverse ? sourceOut - offset : sourceIn + offset;
+    };
+    const double p0 = position(static_cast<double>(segStart));
+    const double p1 = position(static_cast<double>(segStart) + static_cast<double>(count));
+    const auto lo = std::max<std::int64_t>(0, static_cast<std::int64_t>(std::floor(std::min(p0, p1))) - 1);
+    const auto hi = static_cast<std::int64_t>(std::ceil(std::max(p0, p1))) + 2;
+    ensureWindow(reader, lo, hi, clip.reverse);
+    const auto have = static_cast<std::int64_t>(reader.window.size() / ch);
+    if (have < 2) {
+        return count;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        const double p = position(static_cast<double>(segStart) + static_cast<double>(i)) - static_cast<double>(reader.windowStart);
+        const auto i0 = static_cast<std::int64_t>(std::floor(p));
+        if (i0 < 0 || i0 + 1 >= have) {
+            continue; // outside the decoded source (start/end of the media): silence
+        }
+        const auto frac = static_cast<float>(p - static_cast<double>(i0));
+        const float* a = reader.window.data() + static_cast<std::size_t>(i0) * ch;
+        const float* b = a + ch;
+        for (std::size_t c = 0; c < ch; ++c) {
+            m_scratch[i * ch + c] = a[c] + (b[c] - a[c]) * frac;
+        }
+    }
+    return count;
 }
 
 std::size_t SequenceAudioSource::read(float* out, std::size_t frames) {
@@ -567,7 +767,14 @@ std::size_t SequenceAudioSource::read(float* out, std::size_t frames) {
                     clipEnd = std::max(clipEnd, timeToFrames(span.end, rate, Rounding::Nearest));
                 }
                 if (span.to == &clip && span.from != nullptr) {
-                    const auto earliest = timeToFrames(clip.start - clip.sourceIn, rate, Rounding::Ceil);
+                    const auto media = m_snapshot->media.find(clip.media);
+                    std::optional<Rational> limit;
+                    if (media != m_snapshot->media.end() && media->second.info.duration.isPositive() &&
+                        !media->second.isGenerated()) {
+                        limit = media->second.info.duration;
+                    }
+                    const auto room = clip.roomBefore(limit);
+                    const auto earliest = room ? timeToFrames(clip.start - *room, rate, Rounding::Ceil) : clipStart;
                     clipStart = std::max(earliest, std::min(clipStart, timeToFrames(span.start, rate, Rounding::Nearest)));
                 }
             }

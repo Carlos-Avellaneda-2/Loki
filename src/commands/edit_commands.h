@@ -104,6 +104,8 @@ struct SourceRange {
 
 // Default source range of a media item: its In/Out marks, else the whole item (stills: 5 s).
 [[nodiscard]] SourceRange sourceRangeOf(const model::MediaItem& item);
+// Same, but a nested sequence covers its current duration (the item's info may be stale).
+[[nodiscard]] SourceRange sourceRangeOf(const model::Project& project, const model::MediaItem& item);
 
 // Destination tracks; null = do not place that part (e.g. video only).
 struct EditTargets {
@@ -203,6 +205,48 @@ enum class ClipEdge { In, Out };
 [[nodiscard]] std::unique_ptr<Command> makeNewTitle(const model::Project& project, model::SequenceId sequence,
                                                     model::TrackId track, const Rational& at, const Rational& duration,
                                                     std::string name, model::MediaId* titleMedia = nullptr);
+
+// Places `duration` of a new generated media item (`generator`, e.g. kAdjustmentGenerator) at `at`
+// on a video `track` (overwrite), creating the item in the project, as one undo step.
+[[nodiscard]] std::unique_ptr<Command> makeNewGeneratedClip(const model::Project& project, model::SequenceId sequence,
+                                                            model::TrackId track, const Rational& at,
+                                                            const Rational& duration, std::string name,
+                                                            std::string_view generator,
+                                                            model::MediaId* newMedia = nullptr);
+
+// --- Speed (D28) -------------------------------------------------------------------------------
+
+// Speed/Duration: sets `speed` (> 0, 1 = 100 %) and `reverse` on the clips (and linked partners).
+// The source content stays, so the duration becomes span / speed (whole frames, limited by the
+// media). Without `ripple` a longer clip stops at the next clip; with it the following clips of
+// that track move.
+[[nodiscard]] std::unique_ptr<Command> makeSetClipSpeed(const model::Project& project, model::SequenceId sequence,
+                                                        const std::vector<model::ClipId>& clips, const Rational& speed,
+                                                        bool reverse, bool ripple);
+
+// Rate Stretch tool (R): drags an edge changing the duration but not the content, so the speed
+// follows (span / duration). Never overwrites neighbours.
+[[nodiscard]] std::unique_ptr<Command> makeRateStretch(const model::Project& project, model::SequenceId sequence,
+                                                       model::ClipId clip, ClipEdge edge, const Rational& delta,
+                                                       bool includeLinked = true, GestureId gesture = 0);
+
+// Add Frame Hold: from `at` to the end the video clip shows the frame at `at` (speed 0). `at` at
+// the clip start holds the whole clip. Linked audio is unchanged.
+[[nodiscard]] std::unique_ptr<Command> makeAddFrameHold(const model::Project& project, model::SequenceId sequence,
+                                                        model::ClipId clip, const Rational& at);
+
+// --- Nest (D30) --------------------------------------------------------------------------------
+
+// Moves the clips (and linked partners) into a new sequence (same settings, same track indices,
+// times relative to the first clip) and puts one nested clip per kind in their place on the
+// lowest track used (video and audio parts linked). Transitions between nested clips move too.
+[[nodiscard]] std::unique_ptr<Command> makeNest(const model::Project& project, model::SequenceId sequence,
+                                                const std::vector<model::ClipId>& clips, std::string name,
+                                                model::MediaId* nestMedia = nullptr,
+                                                model::SequenceId* nestedSequence = nullptr);
+
+// A nested-sequence media item for `sequence` (D30), to place it from the Project panel.
+[[nodiscard]] model::MediaItem makeNestMedia(const model::Sequence& sequence, std::string name);
 
 // --- Copy / paste (D18) ------------------------------------------------------------------------
 

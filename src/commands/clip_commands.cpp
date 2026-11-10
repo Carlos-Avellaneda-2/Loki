@@ -159,12 +159,10 @@ void SplitClipCommand::redo(Project& project) {
     const TrackId trackId = ref.track->id;
 
     Clip left = original;
-    left.duration = m_at - original.start;
+    left.moveOut(m_at - original.end());
     Clip right = original;
     right.id = m_rightId;
-    right.start = m_at;
-    right.sourceIn = original.sourceIn + left.duration;
-    right.duration = original.end() - m_at;
+    right.moveIn(m_at - original.start);
     right.link = LinkId(); // relinking split A/V pairs is handled by Phase 7 link-aware edits
 
     auto mutator = mutate(project);

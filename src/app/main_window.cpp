@@ -15,7 +15,11 @@
 #include "ui/effects_panel.h"
 #include "app/export_dialog.h"
 #include "app/sequence_dialog.h"
+#include "commands/marker_commands.h"
 #include "commands/project_commands.h"
+#include "ui/markers_panel.h"
+#include "ui/scopes_panel.h"
+#include "ui/video_view.h"
 #include "ui/auto_saver.h"
 #include "ui/stall_detector.h"
 #include "commands/effect_commands.h"
@@ -44,6 +48,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPointer>
 #include <QSettings>
 #include <QStatusBar>
 
@@ -178,6 +183,17 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
             [this](const QString& text) { statusBar()->showMessage(text, 5000); });
     connect(m_sourceMonitor, &ui::SourceMonitorPanel::editRequested, this, &MainWindow::sourceEdit);
     connect(m_timeline, &ui::timeline::TimelinePanel::sequenceRequested, this, &MainWindow::setActiveSequence);
+    connect(m_timeline->view(), &ui::timeline::TimelineView::openSequenceRequested, this, &MainWindow::setActiveSequence);
+    connect(m_markers, &ui::MarkersPanel::seekRequested, this, [this](Rational t) { m_programMonitor->engine().seek(t); });
+    m_markers->setEditor([this](model::MarkerId id) { m_timeline->view()->editMarker(id); });
+    // Scopes (D32): the Program picture, read back only while the Scopes panel is shown.
+    m_programMonitor->videoView()->setFrameTap(
+        [scopes = QPointer<ui::ScopesPanel>(m_scopes)] { return scopes && scopes->wantsImages(); },
+        [scopes = QPointer<ui::ScopesPanel>(m_scopes)](const QImage& image) {
+            if (scopes) {
+                scopes->setImage(image);
+            }
+        });
     connect(m_controller, &ui::ProjectController::projectReset, this, &MainWindow::activateFirstSequence);
     connect(m_controller, &ui::ProjectController::projectChanged, this, [this](const model::ChangeEvent& e) {
         if (e.kind == model::ChangeKind::SequenceRemoved && e.id == m_activeSequence.uuid()) {
@@ -199,6 +215,7 @@ void MainWindow::setActiveSequence(model::SequenceId id) {
     m_timeline->setSequence(m_activeSequence);
     m_programMonitor->setSequence(m_activeSequence);
     m_audioMixer->setSequence(m_activeSequence);
+    m_markers->setSequence(m_activeSequence);
 }
 
 bool MainWindow::createSequence(const std::string& name, const model::SequenceSettings& settings, int videoTracks,
@@ -274,7 +291,7 @@ void MainWindow::sourceEdit(model::MediaId media, bool insert) {
         statusBar()->showMessage(tr("No active sequence"), 4000);
         return;
     }
-    const auto range = commands::sourceRangeOf(*item);
+    const auto range = commands::sourceRangeOf(project, *item);
     const Rational at = quantizeToFrame(m_programMonitor->engine().position(), sequence->settings.frameRate,
                                         Rounding::Floor);
     try {
@@ -339,7 +356,31 @@ void MainWindow::exportMedia() {
     dialog.exec();
 }
 
+bool MainWindow::deleteSequence(model::SequenceId id) {
+    const auto& project = m_controller->project();
+    if (project.sequences().size() < 2) {
+        statusBar()->showMessage(tr("A project keeps at least one sequence"), 4000);
+        return false;
+    }
+    std::vector<std::unique_ptr<commands::Command>> steps;
+    for (const auto& media : project.media()) {
+        if (media.isNest() && media.sequence == id) {
+            steps.push_back(std::make_unique<commands::RemoveMediaCommand>(media.id)); // and its clips
+        }
+    }
+    steps.push_back(std::make_unique<commands::RemoveSequenceCommand>(id));
+    return m_controller->execute(std::make_unique<commands::MacroCommand>("Delete Sequence", std::move(steps)));
+}
+
+void MainWindow::newAdjustmentLayer() {
+    placeGenerated(model::kAdjustmentGenerator, tr("Adjustment Layer").toStdString());
+}
+
 void MainWindow::newTitle() {
+    placeGenerated(model::kTitleGenerator, "Title");
+}
+
+void MainWindow::placeGenerated(std::string_view generator, const std::string& name) {
     const auto& project = m_controller->project();
     const auto* sequence = project.findSequence(m_activeSequence);
     if (sequence == nullptr || sequence->videoTracks.empty()) {
@@ -370,7 +411,7 @@ void MainWindow::newTitle() {
     }
     try {
         model::MediaId media;
-        auto command = commands::makeNewTitle(project, m_activeSequence, track, at, duration, "Title", &media);
+        auto command = commands::makeNewGeneratedClip(project, m_activeSequence, track, at, duration, name, generator, &media);
         if (m_controller->execute(std::move(command))) {
             for (const auto& c : project.findTrack(track).track->clips) {
                 if (c.media == media) {
@@ -385,6 +426,7 @@ void MainWindow::newTitle() {
 }
 
 MainWindow::~MainWindow() {
+    m_programMonitor->videoView()->setFrameTap({}, {}); // the scopes go away with the docks
     // Panels reference the controller and media services: destroy them (with the dock manager)
     // before Qt deletes the remaining children in creation order.
     delete m_dockManager; // NOLINT(cppcoreguidelines-owning-memory): Qt child, deleted early on purpose
@@ -439,8 +481,12 @@ void MainWindow::applyWorkspace(Workspace workspace) {
         auto* effectsArea = m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Effects), timelineArea);
         m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Project), effectsArea);
         effectsArea->setCurrentDockWidget(dockWidget(PanelId::Effects));
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Markers), effectsArea);
+        effectsArea->setCurrentDockWidget(dockWidget(PanelId::Effects));
         m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
-        m_dockManager->setSplitterSizes(programArea, {350, 950});
+        // Color: the scopes beside the Program Monitor.
+        m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::Scopes), programArea);
+        m_dockManager->setSplitterSizes(programArea, {350, 650, 450});
         showAllPanels();
         return;
     }
@@ -450,11 +496,13 @@ void MainWindow::applyWorkspace(Workspace workspace) {
         auto* mixerArea = m_dockManager->addDockWidget(ads::TopDockWidgetArea, dockWidget(PanelId::AudioMixer));
         m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::SourceMonitor), mixerArea);
         m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::EffectControls), mixerArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Scopes), mixerArea);
         mixerArea->setCurrentDockWidget(dockWidget(PanelId::AudioMixer));
         m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::ProgramMonitor), mixerArea);
         auto* timelineArea = m_dockManager->addDockWidget(ads::BottomDockWidgetArea, dockWidget(PanelId::Timeline));
         auto* projectArea = m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Project), timelineArea);
         m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Effects), projectArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Markers), projectArea);
         projectArea->setCurrentDockWidget(dockWidget(PanelId::Project));
         m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
         m_dockManager->setSplitterSizes(timelineArea, {250, 800, 250});
@@ -467,11 +515,13 @@ void MainWindow::applyWorkspace(Workspace workspace) {
     auto* sourceArea = m_dockManager->addDockWidget(ads::TopDockWidgetArea, dockWidget(PanelId::SourceMonitor));
     m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::EffectControls), sourceArea);
     m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::AudioMixer), sourceArea);
+    m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Scopes), sourceArea);
     m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::ProgramMonitor), sourceArea);
 
     auto* timelineArea = m_dockManager->addDockWidget(ads::BottomDockWidgetArea, dockWidget(PanelId::Timeline));
     auto* projectArea = m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Project), timelineArea);
     m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Effects), projectArea);
+    m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Markers), projectArea);
     projectArea->setCurrentDockWidget(dockWidget(PanelId::Project));
     m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
 
@@ -514,6 +564,14 @@ QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
     case ui::PanelId::AudioMixer: {
         m_audioMixer = new ui::AudioMixerPanel(*m_controller);
         return m_audioMixer;
+    }
+    case ui::PanelId::Markers: {
+        m_markers = new ui::MarkersPanel(*m_controller);
+        return m_markers;
+    }
+    case ui::PanelId::Scopes: {
+        m_scopes = new ui::ScopesPanel();
+        return m_scopes;
     }
     default: return ui::createPanel(id);
     }
@@ -587,13 +645,27 @@ void MainWindow::createMenus() {
     sequenceMenu->addSeparator();
     sequenceMenu->addAction(tr("&Add Tracks..."), this, [this] { addTracks(); });
     sequenceMenu->addSeparator();
-    sequenceMenu->addAction(tr("&Delete Sequence"), this, [this] {
-        if (m_controller->project().sequences().size() < 2) {
-            statusBar()->showMessage(tr("A project keeps at least one sequence"), 4000);
-            return;
+    sequenceMenu->addAction(tr("Add Ad&justment Layer"), this, [this] { newAdjustmentLayer(); });
+    sequenceMenu->addSeparator();
+    auto* addMarker = sequenceMenu->addAction(tr("Add &Marker"));
+    connect(addMarker, &QAction::triggered, this, [this] { m_timeline->view()->addMarker(); });
+    sequenceMenu->addAction(tr("Clear All Markers"), this, [this] {
+        try {
+            if (auto command = commands::makeClearSequenceMarkers(m_controller->project(), m_activeSequence)) {
+                m_controller->execute(std::move(command));
+            }
+        } catch (const std::exception& e) {
+            statusBar()->showMessage(QString::fromUtf8(e.what()), 4000);
         }
-        m_controller->execute(std::make_unique<commands::RemoveSequenceCommand>(m_activeSequence));
     });
+    sequenceMenu->addSeparator();
+    sequenceMenu->addAction(tr("&Delete Sequence"), this, [this] { deleteSequence(m_activeSequence); });
+
+    auto* clipMenu = menuBar()->addMenu(tr("&Clip"));
+    clipMenu->addAction(tr("&Speed/Duration..."), this, [this] { m_timeline->view()->speedDuration(); });
+    clipMenu->addAction(tr("Add &Frame Hold"), this, [this] { m_timeline->view()->addFrameHold(); });
+    clipMenu->addSeparator();
+    clipMenu->addAction(tr("&Nest..."), this, [this] { m_timeline->view()->nestSelection(); });
 
     auto* windowMenu = menuBar()->addMenu(tr("&Window"));
     m_workspaceMenu = windowMenu->addMenu(tr("&Workspaces"));

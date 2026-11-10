@@ -6,7 +6,10 @@
 #include "ui/effects_panel.h"
 #include "commands/project_commands.h"
 #include "model/effect_registry.h"
+#include "commands/marker_commands.h"
 #include "ui/audio_scale.h"
+#include "ui/marker_dialog.h"
+#include "ui/speed_dialog.h"
 #include "ui/media_services.h"
 #include "ui/project_controller.h"
 #include "ui/project_item_model.h"
@@ -14,6 +17,7 @@
 #include "util/timecode.h"
 
 #include <QContextMenuEvent>
+#include <QInputDialog>
 #include <QDragEnterEvent>
 #include <QMenu>
 #include <QMimeData>
@@ -355,6 +359,43 @@ void TimelineView::paintRuler(QPainter& p, const QRect& area) const {
         p.drawText(QPointF(x + 3, area.top() + 12),
                    qs(formatTimecode(timeToFrames(t, rate, Rounding::Floor), rate, supportsDropFrame(rate))));
     }
+    // Sequence markers (D29): a small tab at the bottom of the ruler, a bar for durations.
+    if (const auto* seq = sequence()) {
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, true);
+        for (const auto& m : seq->markers) {
+            const double x = area.left() + timeToX(m.time, m_metrics);
+            if (m.duration.isPositive()) {
+                const double x1 = area.left() + timeToX(m.time + m.duration, m_metrics);
+                QColor bar = markerQColor(m.color);
+                bar.setAlpha(110);
+                p.fillRect(QRectF(x, area.bottom() - 6, std::max(1.0, x1 - x), 5), bar);
+            }
+            if (x < area.left() - 6 || x > area.right() + 6) {
+                continue;
+            }
+            const QPointF tab[] = {{x - 5, area.bottom() - 13.0}, {x + 5, area.bottom() - 13.0}, {x + 5, area.bottom() - 6.0},
+                                   {x, area.bottom() - 1.0},      {x - 5, area.bottom() - 6.0}};
+            p.setPen(QPen(QColor(0, 0, 0, 160), 1));
+            p.setBrush(markerQColor(m.color));
+            p.drawPolygon(tab, 5);
+        }
+        p.restore();
+    }
+}
+
+model::MarkerId TimelineView::markerAt(const QPoint& pos) const {
+    const auto* seq = sequence();
+    if (seq == nullptr || pos.y() >= m_metrics.rulerHeight || pos.x() < kHeaderWidth) {
+        return {};
+    }
+    for (auto it = seq->markers.rbegin(); it != seq->markers.rend(); ++it) {
+        const double x = kHeaderWidth + timeToX(it->time, m_metrics);
+        if (std::abs(pos.x() - x) <= 6.0 && pos.y() >= m_metrics.rulerHeight - 16) {
+            return it->id;
+        }
+    }
+    return {};
 }
 
 void TimelineView::paintHeaders(QPainter& p, const std::vector<TrackRow>& rowList) const {
@@ -457,8 +498,29 @@ void TimelineView::paintClip(QPainter& p, const QRectF& r, const model::Clip& cl
         QFont f = p.font();
         f.setPointSizeF(8.0);
         p.setFont(f);
-        const QString name = qs(clip.name.empty() && media != nullptr ? media->name : clip.name);
+        QString name = qs(clip.name.empty() && media != nullptr ? media->name : clip.name);
+        // Retimed clips show their speed like Premiere (D28).
+        if (clip.speed.isZero()) {
+            name += tr(" [Frame Hold]");
+        } else if (clip.isRetimed()) {
+            name += QStringLiteral(" [%1%]").arg((clip.reverse ? -1.0 : 1.0) * clip.speed.toDouble() * 100.0, 0, 'g', 4);
+        }
         p.drawText(r.adjusted(4, 1, -2, 0), Qt::AlignLeft | Qt::AlignTop, name);
+    }
+    // Clip markers (media markers in this clip's source range, D29).
+    if (media != nullptr && !media->markers.empty() && !clip.speed.isZero()) {
+        const Rational lo = clip.sourceIn;
+        const Rational hi = clip.sourceOut();
+        for (const auto& m : media->markers) {
+            if (m.time < lo || !(m.time < hi)) {
+                continue;
+            }
+            const double x = r.left() + (clip.toSequenceTime(m.time) - clip.start).toDouble() * m_metrics.pixelsPerSecond;
+            const QPointF tri[] = {{x - 4, r.top() + 1}, {x + 4, r.top() + 1}, {x, r.top() + 8}};
+            p.setPen(Qt::NoPen);
+            p.setBrush(markerQColor(m.color));
+            p.drawPolygon(tri, 3);
+        }
     }
     if (selected) {
         p.setPen(QPen(Qt::white, 1.5));
@@ -646,7 +708,7 @@ void TimelineView::paintAudioOverlay(QPainter& p, const QRectF& r, const model::
         if (const auto* level = effect->findParameter("level"); level != nullptr && level->isAnimated()) {
             p.setBrush(QColor(0xf0, 0xe0, 0x60));
             for (const auto& k : level->keyframes) {
-                const double x = r.left() + (k.time - clip.sourceIn).toDouble() * pps;
+                const double x = r.left() + (clip.toSequenceTime(k.time) - clip.start).toDouble() * pps;
                 if (x < r.left() || x > r.right()) {
                     continue;
                 }
@@ -713,19 +775,23 @@ void TimelineView::paintWaveform(QPainter& p, const QRectF& r, const model::Clip
     const double half = r.height() / 2.0 * 0.95;
     const double secondsPerPixel = 1.0 / m_metrics.pixelsPerSecond;
     const double peaksPerSecond = static_cast<double>(wf->sampleRate) / wf->samplesPerPeak;
-    const double sourceStart = clip.sourceIn.toDouble();
+    // Retimed clips (D28): each pixel covers `speed` times more source, read backwards if reversed.
+    const double speed = clip.speed.toDouble();
+    const double sourceIn = clip.sourceIn.toDouble();
+    const double sourceOut = clip.sourceOut().toDouble();
     // Visible part only.
     const int xFrom = static_cast<int>(std::max(r.left(), static_cast<double>(kHeaderWidth)));
     const int xTo = static_cast<int>(std::min(r.right(), static_cast<double>(width())));
     p.setPen(QColor(0xc8, 0xf0, 0xd8, 200));
     for (int x = xFrom; x < xTo; ++x) {
-        const double s0 = sourceStart + (x - r.left()) * secondsPerPixel;
-        const double s1 = s0 + secondsPerPixel;
+        const double t0 = (x - r.left()) * secondsPerPixel;
+        const double s0 = clip.reverse ? sourceOut - (t0 + secondsPerPixel) * speed : sourceIn + t0 * speed;
+        const double s1 = s0 + std::max(secondsPerPixel * speed, 1e-6);
         auto p0 = static_cast<std::size_t>(std::max(0.0, s0 * peaksPerSecond));
         auto p1 = static_cast<std::size_t>(std::max(0.0, s1 * peaksPerSecond));
         p1 = std::max(p1, p0 + 1);
         if (p0 >= wf->peakCount()) {
-            break;
+            continue; // reversed clips walk the source backwards
         }
         int lo = 0;
         int hi = 0;
@@ -952,7 +1018,7 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
         m_dragLinked = !event->modifiers().testFlag(Qt::AltModifier);
         return;
     }
-    if ((m_tool == Tool::Ripple || m_tool == Tool::Roll) && hit.zone == HitZone::Body) {
+    if ((m_tool == Tool::Ripple || m_tool == Tool::Roll || m_tool == Tool::RateStretch) && hit.zone == HitZone::Body) {
         selectWithLinked(hit.clip, false, false);
         return;
     }
@@ -1150,6 +1216,8 @@ void TimelineView::mouseReleaseEvent(QMouseEvent* event) {
             switch (m_tool) {
             case Tool::Ripple: return commands::makeRippleTrim(project, m_sequence, m_dragClip, edge, dt, m_dragLinked);
             case Tool::Roll: return commands::makeRollEdit(project, m_sequence, m_dragClip, edge, dt, m_dragLinked);
+            case Tool::RateStretch:
+                return commands::makeRateStretch(project, m_sequence, m_dragClip, edge, dt, m_dragLinked);
             default: return commands::makeTrimEdge(project, m_sequence, m_dragClip, edge, dt, m_dragLinked);
             }
         });
@@ -1167,6 +1235,27 @@ void TimelineView::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void TimelineView::mouseDoubleClickEvent(QMouseEvent* event) {
+    const QPoint pos = event->position().toPoint();
+    const auto* seq = sequence();
+    if (seq != nullptr && event->button() == Qt::LeftButton) {
+        // A marker in the ruler: edit it (D29).
+        if (const auto marker = markerAt(pos)) {
+            editMarker(marker);
+            return;
+        }
+        // A nested sequence clip: open that sequence (D30).
+        if (pos.y() >= m_metrics.rulerHeight && pos.x() >= kHeaderWidth) {
+            const auto hit = hitTest(*seq, rows(), m_metrics, contentX(pos.x()), pos.y());
+            if (hit.clip) {
+                const auto ref = m_controller.project().findClip(hit.clip);
+                const auto* media = ref.clip != nullptr ? m_controller.project().findMedia(ref.clip->media) : nullptr;
+                if (media != nullptr && media->isNest()) {
+                    emit openSequenceRequested(media->sequence);
+                    return;
+                }
+            }
+        }
+    }
     // Double-click on the ruler: move the playhead there (same as a click).
     mousePressEvent(event);
 }
@@ -1304,6 +1393,138 @@ void TimelineView::toggleLinkSelection() {
     });
 }
 
+// --- Markers (D29) -------------------------------------------------------------------------------
+
+void TimelineView::addMarker() {
+    const auto* seq = sequence();
+    if (seq == nullptr) {
+        return;
+    }
+    model::Marker marker;
+    marker.time = quantizeToFrame(playhead(), seq->settings.frameRate, Rounding::Floor);
+    runEdit([&] { return commands::makeAddSequenceMarker(m_controller.project(), m_sequence, marker); });
+}
+
+void TimelineView::goToMarker(bool next) {
+    const auto* seq = sequence();
+    if (seq == nullptr || !m_transport.seek) {
+        return;
+    }
+    const auto t = next ? commands::nextMarkerTime(seq->markers, playhead())
+                        : commands::previousMarkerTime(seq->markers, playhead());
+    if (t) {
+        m_transport.seek(*t);
+        scrollToTime(*t);
+    }
+}
+
+void TimelineView::clearMarkerAtPlayhead() {
+    const auto* seq = sequence();
+    if (seq == nullptr) {
+        return;
+    }
+    const Rational at = quantizeToFrame(playhead(), seq->settings.frameRate, Rounding::Floor);
+    for (auto it = seq->markers.rbegin(); it != seq->markers.rend(); ++it) {
+        if (it->time == at) {
+            const auto id = it->id;
+            runEdit([&] { return commands::makeRemoveSequenceMarker(m_controller.project(), m_sequence, id); });
+            return;
+        }
+    }
+}
+
+void TimelineView::editMarker(model::MarkerId id) {
+    const auto* seq = sequence();
+    const auto* marker = seq != nullptr ? commands::findMarker(seq->markers, id) : nullptr;
+    if (marker == nullptr) {
+        return;
+    }
+    MarkerDialog dialog(*marker, seq->settings.frameRate, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    if (dialog.deleteRequested()) {
+        runEdit([&] { return commands::makeRemoveSequenceMarker(m_controller.project(), m_sequence, id); });
+    } else {
+        const auto edited = dialog.marker();
+        runEdit([&] { return commands::makeEditSequenceMarker(m_controller.project(), m_sequence, edited); });
+    }
+}
+
+// --- Speed and nesting (D28, D30) -----------------------------------------------------------------
+
+void TimelineView::speedDuration() {
+    const auto* seq = sequence();
+    if (seq == nullptr || m_selection.empty()) {
+        emit statusMessage(tr("Select the clips to change their speed"));
+        return;
+    }
+    const auto* clip = m_controller.project().findClip(*m_selection.begin()).clip;
+    if (clip == nullptr) {
+        return;
+    }
+    // The source span at 100 %: a frame hold starts from its duration.
+    const Rational span = clip->speed.isZero() ? clip->duration : clip->sourceSpan();
+    SpeedDialog dialog(span, seq->settings.frameRate, clip->speed.toDouble() * 100.0, clip->reverse, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const std::vector<model::ClipId> ids(m_selection.begin(), m_selection.end());
+    const auto speed = dialog.speed();
+    const bool reverse = dialog.reverse();
+    const bool ripple = dialog.ripple();
+    runEdit([&] { return commands::makeSetClipSpeed(m_controller.project(), m_sequence, ids, speed, reverse, ripple); });
+}
+
+std::optional<commands::PlacedClip> TimelineView::clipForFrameHold() const {
+    const auto* seq = sequence();
+    if (seq == nullptr) {
+        return std::nullopt;
+    }
+    const Rational at = playhead();
+    const auto over = [&](const model::Clip& c) { return c.start <= at && at < c.end(); };
+    for (const auto& track : seq->videoTracks) {
+        for (const auto& c : track.clips) {
+            if (over(c) && (m_selection.contains(c.id) || (m_selection.empty() && track.id == m_targetVideo))) {
+                return commands::PlacedClip{track.id, c};
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+void TimelineView::addFrameHold() {
+    const auto target = clipForFrameHold();
+    const auto* seq = sequence();
+    if (!target || seq == nullptr) {
+        emit statusMessage(tr("Put the playhead over a selected video clip"));
+        return;
+    }
+    const Rational at = quantizeToFrame(playhead(), seq->settings.frameRate, Rounding::Floor);
+    const auto id = target->clip.id;
+    runEdit([&] { return commands::makeAddFrameHold(m_controller.project(), m_sequence, id, at); });
+}
+
+void TimelineView::nestSelection() {
+    if (m_selection.empty()) {
+        emit statusMessage(tr("Select the clips to nest"));
+        return;
+    }
+    bool ok = false;
+    const int count = static_cast<int>(m_controller.project().sequences().size());
+    const auto name = QInputDialog::getText(this, tr("Nested Sequence Name"), tr("Name:"), QLineEdit::Normal,
+                                            tr("Nested Sequence %1").arg(count), &ok);
+    if (!ok || name.trimmed().isEmpty()) {
+        return;
+    }
+    const std::vector<model::ClipId> ids(m_selection.begin(), m_selection.end());
+    runEdit([&] {
+        return commands::makeNest(m_controller.project(), m_sequence, ids, name.trimmed().toStdString());
+    });
+    m_selection.clear();
+    emit selectionChanged();
+}
+
 void TimelineView::markIn() {
     sequence_edits::markIn(m_controller, m_sequence, playhead());
 }
@@ -1422,6 +1643,10 @@ void TimelineView::contextMenuEvent(QContextMenuEvent* event) {
             menu.addAction(tr("Delete"), this, [this] { deleteSelection(); });
             menu.addAction(tr("Ripple Delete"), this, [this] { rippleDeleteSelection(); });
             menu.addSeparator();
+            menu.addAction(tr("Speed/Duration..."), this, [this] { speedDuration(); });
+            menu.addAction(tr("Add Frame Hold"), this, [this] { addFrameHold(); });
+            menu.addAction(tr("Nest..."), this, [this] { nestSelection(); });
+            menu.addSeparator();
             menu.addAction(tr("Link / Unlink"), this, [this] { toggleLinkSelection(); });
             menu.addSeparator();
             menu.addAction(tr("Copy"), this, [this] { copySelection(); });
@@ -1452,7 +1677,7 @@ std::optional<TimelineView::DropPreview> TimelineView::dropPreviewAt(const QMime
     const auto* row = rowAt(rowList, pos.y());
     DropPreview preview;
     preview.media = media->id;
-    preview.duration = commands::sourceRangeOf(*media).duration;
+    preview.duration = commands::sourceRangeOf(m_controller.project(), *media).duration;
     preview.at = snapped(timeAt(pos.x()));
     if (row != nullptr) {
         preview.row = *row;
@@ -1517,7 +1742,7 @@ void TimelineView::dropEvent(QDropEvent* event) {
     };
     targets.video = row.kind == model::TrackKind::Video ? row.id : pick(model::TrackKind::Video);
     targets.audio = row.kind == model::TrackKind::Audio ? row.id : pick(model::TrackKind::Audio);
-    const auto range = commands::sourceRangeOf(*media);
+    const auto range = commands::sourceRangeOf(m_controller.project(), *media);
     const bool insert = event->modifiers().testFlag(Qt::ControlModifier);
     runEdit([&] {
         return insert ? commands::makeInsertEdit(m_controller.project(), m_sequence, range, preview->at, targets)

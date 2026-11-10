@@ -21,8 +21,10 @@ using Migration = void (*)(json&);
 
 // v1 -> v2: only additions (transitions, generators, string parameters); v1 documents are valid.
 void migrate1to2(json&) {}
+// v2 -> v3: only additions (speed, reverse, markers, nested media); v2 documents are valid.
+void migrate2to3(json&) {}
 
-constexpr std::array<Migration, kProjectFormatVersion - 1> kMigrations{&migrate1to2};
+constexpr std::array<Migration, kProjectFormatVersion - 1> kMigrations{&migrate1to2, &migrate2to3};
 
 // ---------------------------------------------------------------------------------------------
 // Writing
@@ -68,6 +70,24 @@ json effectToJson(const Effect& effect) {
     return j;
 }
 
+json markersToJson(const std::vector<Marker>& markers) {
+    json list = json::array();
+    for (const auto& m : markers) {
+        json j = {{"id", idToJson(m.id)}, {"time", rationalToJson(m.time)}, {"color", static_cast<int>(m.color)}};
+        if (m.duration.isPositive()) {
+            j["duration"] = rationalToJson(m.duration);
+        }
+        if (!m.name.empty()) {
+            j["name"] = m.name;
+        }
+        if (!m.comment.empty()) {
+            j["comment"] = m.comment;
+        }
+        list.push_back(std::move(j));
+    }
+    return list;
+}
+
 const char* alignmentName(TransitionAlignment a) {
     switch (a) {
     case TransitionAlignment::Center: return "center";
@@ -97,6 +117,13 @@ json clipToJson(const Clip& clip) {
     }
     if (clip.fadeOut.isPositive()) {
         j["fadeOut"] = rationalToJson(clip.fadeOut);
+    }
+    // v3 (D28): omitted at 100 % forward.
+    if (clip.speed != Rational(1)) {
+        j["speed"] = rationalToJson(clip.speed);
+    }
+    if (clip.reverse) {
+        j["reverse"] = true;
     }
     return j;
 }
@@ -174,6 +201,12 @@ json mediaToJson(const MediaItem& m, const std::filesystem::path& projectDir) {
     }
     if (m.markOut) {
         j["markOut"] = rationalToJson(*m.markOut);
+    }
+    if (m.isNest()) {
+        j["sequence"] = idToJson(m.sequence);
+    }
+    if (!m.markers.empty()) {
+        j["markers"] = markersToJson(m.markers);
     }
     return j;
 }
@@ -358,7 +391,41 @@ private:
         if (j.contains("markOut")) {
             m.markOut = rational(j, "markOut", at);
         }
+        if (j.contains("sequence")) {
+            m.sequence = id<SequenceId>(j, "sequence", at, true);
+        }
+        m.markers = readMarkers(j, at);
         return m;
+    }
+
+    static std::vector<Marker> readMarkers(const json& j, const std::string& at) {
+        std::vector<Marker> markers;
+        if (!j.contains("markers")) {
+            return markers;
+        }
+        const auto& list = array(j, "markers", at);
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            const std::string mAt = at + "/markers/" + std::to_string(i);
+            Marker m;
+            m.id = id<MarkerId>(list[i], "id", mAt, false);
+            m.time = rational(list[i], "time", mAt);
+            const int color = integer(list[i], "color", mAt);
+            if (color < 0 || color >= kMarkerColorCount) {
+                fail(mAt + "/color", "unknown marker color");
+            }
+            m.color = static_cast<MarkerColor>(color);
+            if (list[i].contains("duration")) {
+                m.duration = rational(list[i], "duration", mAt);
+            }
+            if (list[i].contains("name")) {
+                m.name = string(list[i], "name", mAt);
+            }
+            if (list[i].contains("comment")) {
+                m.comment = string(list[i], "comment", mAt);
+            }
+            markers.push_back(std::move(m));
+        }
+        return markers;
     }
 
     static Effect readEffect(const json& j, const std::string& at) {
@@ -426,6 +493,12 @@ private:
         }
         if (j.contains("fadeOut")) {
             c.fadeOut = rational(j, "fadeOut", at);
+        }
+        if (j.contains("speed")) {
+            c.speed = rational(j, "speed", at);
+        }
+        if (j.contains("reverse")) {
+            c.reverse = boolean(j, "reverse", at);
         }
         const auto& effects = array(j, "effects", at);
         for (std::size_t i = 0; i < effects.size(); ++i) {
@@ -499,6 +572,7 @@ private:
         if (j.contains("masterVolumeDb")) {
             s.masterVolumeDb = number(j, "masterVolumeDb", at);
         }
+        s.markers = readMarkers(j, at);
         return s;
     }
 
@@ -561,6 +635,9 @@ json toJson(const Project& project, const std::filesystem::path& projectFile) {
         }
         if (s.masterVolumeDb != 0.0) {
             seqJson["masterVolumeDb"] = s.masterVolumeDb;
+        }
+        if (!s.markers.empty()) {
+            seqJson["markers"] = markersToJson(s.markers);
         }
         sequences.push_back(std::move(seqJson));
     }

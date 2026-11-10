@@ -34,6 +34,29 @@ struct MediaInfo {
 
 // Generated media (D20): no file; the renderer synthesizes the picture.
 inline constexpr std::string_view kTitleGenerator = "loki.title";
+// Nested sequence (D30): the media shows another sequence of the project (MediaItem::sequence).
+inline constexpr std::string_view kNestGenerator = "loki.nest";
+// Adjustment layer (D31): its color effects apply to the composite of the tracks below.
+inline constexpr std::string_view kAdjustmentGenerator = "loki.adjustment";
+
+// Fastest clip speed (10000 %).
+inline constexpr int kMaxClipSpeed = 100;
+
+// Marker colors (D29), Premiere's order.
+enum class MarkerColor { Green = 0, Red, Purple, Orange, Yellow, White, Blue, Cyan };
+inline constexpr int kMarkerColorCount = 8;
+
+// A sequence marker (sequence time) or a clip marker (source time of a media item) (D29).
+struct Marker {
+    MarkerId id;
+    Rational time;
+    Rational duration; // 0 = a point marker
+    std::string name;
+    std::string comment;
+    MarkerColor color = MarkerColor::Green;
+
+    friend bool operator==(const Marker&, const Marker&) = default;
+};
 
 struct MediaItem {
     MediaId id;
@@ -46,8 +69,12 @@ struct MediaItem {
     // Source Monitor In/Out marks (source time). Used by insert/overwrite.
     std::optional<Rational> markIn;
     std::optional<Rational> markOut;
+    SequenceId sequence;         // kNestGenerator: the nested sequence (D30)
+    std::vector<Marker> markers; // clip markers, source time, sorted by time (D29)
 
     [[nodiscard]] bool isGenerated() const noexcept { return !generator.empty(); }
+    [[nodiscard]] bool isNest() const noexcept { return generator == kNestGenerator; }
+    [[nodiscard]] bool isAdjustment() const noexcept { return generator == kAdjustmentGenerator; }
 
     friend bool operator==(const MediaItem&, const MediaItem&) = default;
 };
@@ -99,11 +126,65 @@ struct Clip {
     Rational fadeIn;
     Rational fadeOut;
     std::vector<Effect> effects;
+    // Speed (D28): source seconds per sequence second (1 = 100 %, 1/2 = 50 % slow motion). 0 holds
+    // the frame at sourceIn (Frame Hold). `reverse` plays [sourceIn, sourceOut) backwards.
+    Rational speed{1};
+    bool reverse = false;
 
     [[nodiscard]] Rational end() const { return start + duration; }
-    [[nodiscard]] Rational sourceOut() const { return sourceIn + duration; }
+    // Source time the clip covers: [sourceIn, sourceOut()).
+    [[nodiscard]] Rational sourceSpan() const { return duration * speed; }
+    [[nodiscard]] Rational sourceOut() const { return sourceIn + sourceSpan(); }
+    [[nodiscard]] bool isRetimed() const { return speed != Rational(1) || reverse; }
     // Converts a sequence time inside this clip to its source time.
-    [[nodiscard]] Rational toSourceTime(const Rational& sequenceTime) const { return sequenceTime - start + sourceIn; }
+    [[nodiscard]] Rational toSourceTime(const Rational& sequenceTime) const {
+        const Rational offset = (sequenceTime - start) * speed;
+        return reverse ? sourceOut() - offset : sourceIn + offset;
+    }
+    // Inverse of toSourceTime (the clip start for a frame hold).
+    [[nodiscard]] Rational toSequenceTime(const Rational& sourceTime) const {
+        if (speed.isZero()) {
+            return start;
+        }
+        return start + (reverse ? sourceOut() - sourceTime : sourceTime - sourceIn) / speed;
+    }
+    // Source time moved per sequence time when slipping (a frame hold slips 1:1).
+    [[nodiscard]] Rational slipFactor() const { return speed.isZero() ? Rational(1) : speed; }
+    // Moves the In edge by `delta` sequence time (positive = later), keeping the content in place.
+    void moveIn(const Rational& delta) {
+        start += delta;
+        duration -= delta;
+        if (!reverse) {
+            sourceIn += delta * speed;
+        }
+    }
+    // Moves the Out edge by `delta` sequence time (positive = later), keeping the content in place.
+    void moveOut(const Rational& delta) {
+        duration += delta;
+        if (reverse) {
+            sourceIn -= delta * speed;
+        }
+    }
+    // How far (sequence time, >= 0) the In edge can move earlier / the Out edge later before the
+    // source runs out. `limit` is the media duration (nullopt = unlimited). nullopt = unlimited.
+    [[nodiscard]] std::optional<Rational> roomBefore(const std::optional<Rational>& limit) const {
+        if (speed.isZero()) {
+            return std::nullopt;
+        }
+        if (!reverse) {
+            return sourceIn / speed;
+        }
+        return limit ? std::optional<Rational>(max(Rational(), *limit - sourceOut()) / speed) : std::nullopt;
+    }
+    [[nodiscard]] std::optional<Rational> roomAfter(const std::optional<Rational>& limit) const {
+        if (speed.isZero()) {
+            return std::nullopt;
+        }
+        if (reverse) {
+            return sourceIn / speed;
+        }
+        return limit ? std::optional<Rational>(max(Rational(), *limit - sourceOut()) / speed) : std::nullopt;
+    }
     [[nodiscard]] const Effect* findEffect(EffectId effectId) const noexcept {
         for (const auto& e : effects) {
             if (e.id == effectId) {
@@ -196,6 +277,7 @@ struct Sequence {
     std::optional<Rational> markIn;
     std::optional<Rational> markOut;
     double masterVolumeDb = 0.0; // master fader (D16)
+    std::vector<Marker> markers; // sequence markers, sorted by time (D29)
 
     [[nodiscard]] const std::vector<Track>& tracks(TrackKind kind) const noexcept {
         return kind == TrackKind::Video ? videoTracks : audioTracks;

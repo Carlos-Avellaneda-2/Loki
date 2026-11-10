@@ -111,6 +111,10 @@ public:
 
     // Clips (in every sequence) whose media is `id`.
     [[nodiscard]] std::vector<ClipId> clipsUsingMedia(MediaId id) const;
+    // Sequences nested (through kNestGenerator media) directly in `sequence`.
+    [[nodiscard]] std::vector<SequenceId> nestedSequencesOf(const Sequence& sequence) const;
+    // True if `outer` is `target` or nests it at any depth (D30: cycles are forbidden).
+    [[nodiscard]] bool sequenceContains(SequenceId outer, SequenceId target) const;
     // True if `ancestor` is `bin` or one of its parents.
     [[nodiscard]] bool binIsWithin(BinId bin, BinId ancestor) const noexcept;
 
@@ -156,6 +160,7 @@ public:
     Sequence removeSequence(SequenceId id, std::size_t* indexOut = nullptr);
     void setSequenceName(SequenceId id, std::string name);
     void setSequenceMasterVolume(SequenceId id, double db);
+    void setSequenceMarkers(SequenceId id, std::vector<Marker> markers); // sorted by time
     void setSequenceSettings(SequenceId id, SequenceSettings settings);
     void setSequenceMarks(SequenceId id, std::optional<Rational> in, std::optional<Rational> out);
 

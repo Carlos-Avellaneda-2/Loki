@@ -276,7 +276,7 @@ void EffectControlsPanel::jumpKeyframe(const std::string& effectType, const std:
         }
     }
     if (target) {
-        m_playhead.seek(c->start + (*target - c->sourceIn));
+        m_playhead.seek(c->toSequenceTime(*target));
     }
 }
 
@@ -406,7 +406,7 @@ void EffectControlsPanel::rebuild() {
                 connect(row.lane, &KeyframeLane::seekRequested, this, [this](const Rational& sourceTime) {
                     const auto* clip = currentClip();
                     if (clip != nullptr && m_playhead.seek) {
-                        m_playhead.seek(clip->start + (sourceTime - clip->sourceIn));
+                        m_playhead.seek(clip->toSequenceTime(sourceTime));
                     }
                 });
                 grid->addWidget(row.lane, r, 6);

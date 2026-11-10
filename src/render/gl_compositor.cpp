@@ -8,6 +8,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace loki::render {
@@ -60,13 +62,20 @@ uniform float wipeProgress;
 uniform float wipeSoftness;
 uniform bool wipeReverse;
 
-vec3 sourceColor() {
+// format 3: nested sequence (a level texture, rows bottom-up); 4: adjustment layer (the image so far).
+vec4 sourceColor() {
     if (format == 2) {
-        return texture(plane0, uv).rgb;
+        return texture(plane0, uv);
+    }
+    if (format == 3) {
+        return texture(plane0, vec2(uv.x, 1.0 - uv.y));
+    }
+    if (format == 4) {
+        return texture(accum, gl_FragCoord.xy / targetSize);
     }
     float y = texture(plane0, uv).r;
     vec2 c = format == 1 ? texture(plane1, uv).rg : vec2(texture(plane1, uv).r, texture(plane2, uv).r);
-    return clamp(yuvMatrix * vec3(y, c.x, c.y) + yuvOffset, 0.0, 1.0);
+    return vec4(clamp(yuvMatrix * vec3(y, c.x, c.y) + yuvOffset, 0.0, 1.0), 1.0);
 }
 
 float overlayChannel(float s, float d) {
@@ -110,12 +119,17 @@ float wipeAlpha(float x) {
     return wipeReverse ? 1.0 - shown : shown;
 }
 
+// render::compositeOver: blend where the destination is opaque, then straight-alpha "over".
 void main() {
-    vec3 dst = texture(accum, gl_FragCoord.xy / targetSize).rgb;
-    vec3 src = grade(sourceColor());
-    float srcAlpha = format == 2 ? texture(plane0, uv).a : 1.0;
-    float a = clamp(opacity, 0.0, 1.0) * srcAlpha * wipeAlpha(gl_FragCoord.x / targetSize.x);
-    color = vec4(mix(dst, blend(src, dst), a), 1.0);
+    vec4 dst = texture(accum, gl_FragCoord.xy / targetSize);
+    vec4 s = sourceColor();
+    vec3 src = grade(s.rgb);
+    float a = clamp(opacity, 0.0, 1.0) * clamp(s.a, 0.0, 1.0) * wipeAlpha(gl_FragCoord.x / targetSize.x);
+    float da = clamp(dst.a, 0.0, 1.0);
+    vec3 blended = mix(src, blend(src, dst.rgb), da);
+    float outA = a + da * (1.0 - a);
+    vec3 rgb = outA > 0.0 ? (blended * a + dst.rgb * da * (1.0 - a)) / outA : vec3(0.0);
+    color = vec4(rgb, outA);
 }
 )";
 
@@ -136,11 +150,15 @@ in vec2 uv;
 out vec4 color;
 uniform sampler2D image;
 void main() {
-    color = vec4(texture(image, uv).rgb, 1.0);
+    vec4 c = texture(image, uv);
+    color = vec4(c.rgb * clamp(c.a, 0.0, 1.0), 1.0); // over black
 }
 )";
 
 // Unit quad (position 0..1, y down in layer pixels; texture coordinate matches).
+// Nesting deeper than this is not drawn (cycles are forbidden by the model).
+constexpr std::size_t kMaxNestingDepth = 16;
+
 constexpr float kQuad[] = {
     0.0f, 0.0f, 0.0f, 0.0f, //
     1.0f, 0.0f, 1.0f, 0.0f, //
@@ -186,12 +204,16 @@ bool GlCompositor::initialize() {
     return true;
 }
 
-void GlCompositor::ensureTargets(int width, int height) {
-    if (width == m_width && height == m_height && m_targets[0].fbo != 0) {
-        return;
+GlCompositor::Level& GlCompositor::ensureLevel(std::size_t depth, int width, int height) {
+    if (m_levels.size() <= depth) {
+        m_levels.resize(depth + 1);
+    }
+    auto& level = m_levels[depth];
+    if (width == level.width && height == level.height && level.targets[0].fbo != 0) {
+        return level;
     }
     auto* f = gl();
-    for (auto& t : m_targets) {
+    for (auto& t : level.targets) {
         if (t.fbo == 0) {
             f->glGenFramebuffers(1, &t.fbo);
             f->glGenTextures(1, &t.texture);
@@ -209,8 +231,9 @@ void GlCompositor::ensureTargets(int width, int height) {
         }
     }
     f->glBindTexture(GL_TEXTURE_2D, 0);
-    m_width = width;
-    m_height = height;
+    level.width = width;
+    level.height = height;
+    return level;
 }
 
 void GlCompositor::uploadLayer(std::size_t slot, const media::VideoFrame& frame) {
@@ -254,41 +277,81 @@ void GlCompositor::render(const CompositeFrame& frame, int width, int height) {
         return;
     }
     auto* f = gl();
-    ensureTargets(width, height);
     m_canvasAspect = frame.height > 0 ? static_cast<double>(frame.width) / frame.height : 16.0 / 9.0;
-
     GLint previousFbo = 0;
     f->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
-    m_current = 0;
-    f->glBindFramebuffer(GL_FRAMEBUFFER, m_targets[0].fbo);
-    f->glViewport(0, 0, width, height);
-    f->glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    f->glClear(GL_COLOR_BUFFER_BIT);
+    m_nextSlot = 0;
+    renderLevel(frame, width, height, 0);
+    m_width = width;
+    m_height = height;
+    f->glActiveTexture(GL_TEXTURE4);
+    f->glBindTexture(GL_TEXTURE_3D, 0);
+    f->glActiveTexture(GL_TEXTURE0);
+    f->glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
+    // Drop LUT textures no layer used in this frame.
+    for (auto it = m_luts.begin(); it != m_luts.end();) {
+        if (!it->second.usedThisFrame) {
+            f->glDeleteTextures(1, &it->second.texture);
+            it = m_luts.erase(it);
+        } else {
+            it->second.usedThisFrame = false;
+            ++it;
+        }
+    }
+}
 
-    m_layerProgram.bind();
-    m_vao.bind();
-    m_layerProgram.setUniformValue("targetSize", QVector2D(static_cast<float>(width), static_cast<float>(height)));
-    for (std::size_t i = 0; i < frame.layers.size(); ++i) {
-        const auto& layer = frame.layers[i];
-        if (!layer.frame || layer.frame->planeCount == 0 || layer.transform.opacity <= 0.0) {
+bool GlCompositor::renderLevel(const CompositeFrame& frame, int width, int height, std::size_t depth) {
+    if (depth > kMaxNestingDepth) {
+        return false;
+    }
+    auto* f = gl();
+    ensureLevel(depth, width, height);
+    // Index access only: nested levels may grow m_levels (references would dangle).
+    const auto targets = [&](int i) -> Target& { return m_levels[depth].targets[static_cast<std::size_t>(i)]; };
+    m_levels[depth].current = 0;
+    f->glBindFramebuffer(GL_FRAMEBUFFER, targets(0).fbo);
+    f->glViewport(0, 0, width, height);
+    f->glClearColor(0.0f, 0.0f, 0.0f, frame.transparent ? 0.0f : 1.0f);
+    f->glClear(GL_COLOR_BUFFER_BIT);
+    const double cw = frame.width > 0 ? frame.width : width;
+    const double ch = frame.height > 0 ? frame.height : height;
+
+    for (const auto& layer : frame.layers) {
+        if (!layer.hasPicture() || layer.transform.opacity <= 0.0 || layer.sourceWidth <= 0 || layer.sourceHeight <= 0) {
             continue;
         }
-        uploadLayer(i, *layer.frame);
+        // The picture: a nested level, the image so far (adjustment) or an uploaded frame.
+        unsigned int nestedTexture = 0;
+        std::size_t slot = 0;
+        if (layer.nested) {
+            const int nw = std::max(1, static_cast<int>(std::lround(layer.sourceWidth * width / cw)));
+            const int nh = std::max(1, static_cast<int>(std::lround(layer.sourceHeight * height / ch)));
+            if (!renderLevel(*layer.nested, nw, nh, depth + 1)) {
+                continue;
+            }
+            const auto& inner = m_levels[depth + 1];
+            nestedTexture = inner.targets[static_cast<std::size_t>(inner.current)].texture;
+        } else if (!layer.adjustment) {
+            slot = m_nextSlot++;
+            uploadLayer(slot, *layer.frame);
+        }
 
         // Copy the accumulated image to the other target, then draw the layer into it.
-        const int src = m_current;
-        const int dst = 1 - m_current;
-        f->glBindFramebuffer(GL_READ_FRAMEBUFFER, m_targets[static_cast<std::size_t>(src)].fbo);
-        f->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_targets[static_cast<std::size_t>(dst)].fbo);
+        const int src = m_levels[depth].current;
+        const int dst = 1 - src;
+        f->glBindFramebuffer(GL_READ_FRAMEBUFFER, targets(src).fbo);
+        f->glBindFramebuffer(GL_DRAW_FRAMEBUFFER, targets(dst).fbo);
         f->glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        f->glBindFramebuffer(GL_FRAMEBUFFER, m_targets[static_cast<std::size_t>(dst)].fbo);
+        f->glBindFramebuffer(GL_FRAMEBUFFER, targets(dst).fbo);
+        f->glViewport(0, 0, width, height);
 
+        m_layerProgram.bind();
+        m_vao.bind();
+        m_layerProgram.setUniformValue("targetSize", QVector2D(static_cast<float>(width), static_cast<float>(height)));
         // layer pixels -> canvas pixels -> NDC (canvas y down, NDC y up).
         const auto m = layerToCanvas(layer);
         const double sx = layer.sourceWidth;
         const double sy = layer.sourceHeight;
-        const double cw = frame.width;
-        const double ch = frame.height;
         // Unit quad -> layer pixels: scale by (sx, sy).
         const double a = m[0] * sx;
         const double b = m[1] * sy;
@@ -301,12 +364,18 @@ void GlCompositor::render(const CompositeFrame& frame, int width, int height) {
                                 static_cast<float>(-2.0 * e / ch), static_cast<float>(1.0 - 2.0 * g / ch),
                                 0.0f, 0.0f, 1.0f};
         m_layerProgram.setUniformValue("toNdc", QMatrix3x3(toNdc));
-        const auto conv = yuvToRgb(layer.frame->matrix, layer.frame->range);
-        m_layerProgram.setUniformValue("yuvMatrix", QMatrix3x3(conv.matrix.data()));
-        m_layerProgram.setUniformValue("yuvOffset", QVector3D(conv.offset[0], conv.offset[1], conv.offset[2]));
-        m_layerProgram.setUniformValue("format", layer.frame->format == media::PixelFormat::Yuv420P ? 0
-                                                 : layer.frame->format == media::PixelFormat::Nv12  ? 1
-                                                                                                    : 2);
+        int format = 4;
+        if (layer.nested) {
+            format = 3;
+        } else if (!layer.adjustment) {
+            const auto conv = yuvToRgb(layer.frame->matrix, layer.frame->range);
+            m_layerProgram.setUniformValue("yuvMatrix", QMatrix3x3(conv.matrix.data()));
+            m_layerProgram.setUniformValue("yuvOffset", QVector3D(conv.offset[0], conv.offset[1], conv.offset[2]));
+            format = layer.frame->format == media::PixelFormat::Yuv420P ? 0
+                     : layer.frame->format == media::PixelFormat::Nv12  ? 1
+                                                                        : 2;
+        }
+        m_layerProgram.setUniformValue("format", format);
         m_layerProgram.setUniformValue("opacity", static_cast<float>(layer.transform.opacity / 100.0));
         m_layerProgram.setUniformValue("blendMode", static_cast<int>(layer.transform.blend));
         const auto& lg = layer.grade;
@@ -333,31 +402,24 @@ void GlCompositor::render(const CompositeFrame& frame, int width, int height) {
         m_layerProgram.setUniformValue("wipeReverse", layer.wipe.reverse);
         for (int p = 0; p < 3; ++p) {
             f->glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(p));
-            f->glBindTexture(GL_TEXTURE_2D, m_layerTextures[i][static_cast<std::size_t>(p)]);
+            unsigned int texture = 0;
+            if (layer.nested) {
+                texture = p == 0 ? nestedTexture : 0;
+            } else if (!layer.adjustment) {
+                texture = m_layerTextures[slot][static_cast<std::size_t>(p)];
+            }
+            f->glBindTexture(GL_TEXTURE_2D, texture);
             m_layerProgram.setUniformValue(("plane" + std::to_string(p)).c_str(), p);
         }
         f->glActiveTexture(GL_TEXTURE3);
-        f->glBindTexture(GL_TEXTURE_2D, m_targets[static_cast<std::size_t>(src)].texture);
+        f->glBindTexture(GL_TEXTURE_2D, targets(src).texture);
         m_layerProgram.setUniformValue("accum", 3);
         f->glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        m_current = dst;
+        m_vao.release();
+        m_layerProgram.release();
+        m_levels[depth].current = dst;
     }
-    m_vao.release();
-    m_layerProgram.release();
-    f->glActiveTexture(GL_TEXTURE4);
-    f->glBindTexture(GL_TEXTURE_3D, 0);
-    f->glActiveTexture(GL_TEXTURE0);
-    f->glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
-    // Drop LUT textures no layer used in this frame.
-    for (auto it = m_luts.begin(); it != m_luts.end();) {
-        if (!it->second.usedThisFrame) {
-            f->glDeleteTextures(1, &it->second.texture);
-            it = m_luts.erase(it);
-        } else {
-            it->second.usedThisFrame = false;
-            ++it;
-        }
-    }
+    return true;
 }
 
 unsigned int GlCompositor::lutTextureFor(const std::shared_ptr<const Lut3D>& lut) {
@@ -388,7 +450,7 @@ void GlCompositor::present(unsigned int targetFramebuffer, int viewportWidth, in
     f->glViewport(0, 0, viewportWidth, viewportHeight);
     f->glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     f->glClear(GL_COLOR_BUFFER_BIT);
-    if (!m_initialized || m_width <= 0 || viewportWidth <= 0 || viewportHeight <= 0) {
+    if (!m_initialized || m_width <= 0 || m_levels.empty() || viewportWidth <= 0 || viewportHeight <= 0) {
         return;
     }
     const auto r = fitRect(static_cast<float>(m_canvasAspect * 1000.0), 1000.0f, static_cast<float>(viewportWidth),
@@ -399,7 +461,8 @@ void GlCompositor::present(unsigned int targetFramebuffer, int viewportWidth, in
     m_presentProgram.setUniformValue("rect", QVector4D(r[0] / vw * 2.0f - 1.0f, 1.0f - (r[1] + r[3]) / vh * 2.0f,
                                                        r[2] / vw * 2.0f, r[3] / vh * 2.0f));
     f->glActiveTexture(GL_TEXTURE0);
-    f->glBindTexture(GL_TEXTURE_2D, m_targets[static_cast<std::size_t>(m_current)].texture);
+    const auto& top = m_levels.front();
+    f->glBindTexture(GL_TEXTURE_2D, top.targets[static_cast<std::size_t>(top.current)].texture);
     m_presentProgram.setUniformValue("image", 0);
     m_vao.bind();
     f->glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -408,14 +471,15 @@ void GlCompositor::present(unsigned int targetFramebuffer, int viewportWidth, in
 }
 
 QImage GlCompositor::readback() {
-    if (!m_initialized || m_width <= 0) {
+    if (!m_initialized || m_width <= 0 || m_levels.empty()) {
         return {};
     }
     auto* f = gl();
     QImage image(m_width, m_height, QImage::Format_RGBA8888);
     GLint previousFbo = 0;
     f->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
-    f->glBindFramebuffer(GL_FRAMEBUFFER, m_targets[static_cast<std::size_t>(m_current)].fbo);
+    const auto& top = m_levels.front();
+    f->glBindFramebuffer(GL_FRAMEBUFFER, top.targets[static_cast<std::size_t>(top.current)].fbo);
     f->glPixelStorei(GL_PACK_ALIGNMENT, 1);
     f->glReadPixels(0, 0, m_width, m_height, GL_RGBA, GL_UNSIGNED_BYTE, image.bits());
     f->glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
@@ -427,13 +491,15 @@ void GlCompositor::release() {
         return;
     }
     auto* f = gl();
-    for (auto& t : m_targets) {
-        if (t.fbo != 0) {
-            f->glDeleteFramebuffers(1, &t.fbo);
-            f->glDeleteTextures(1, &t.texture);
+    for (auto& level : m_levels) {
+        for (auto& t : level.targets) {
+            if (t.fbo != 0) {
+                f->glDeleteFramebuffers(1, &t.fbo);
+                f->glDeleteTextures(1, &t.texture);
+            }
         }
-        t = {};
     }
+    m_levels.clear();
     for (auto& tex : m_layerTextures) {
         f->glDeleteTextures(3, tex.data());
     }
