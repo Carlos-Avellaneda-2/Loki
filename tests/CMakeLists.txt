@@ -46,6 +46,7 @@ loki_add_test_executable(loki_export_tests
 
 loki_add_test_executable(loki_audio_tests
     SOURCES
+        audio/effects_test.cpp
         audio/mixer_test.cpp
     LIBS loki::audio GTest::gtest GTest::gtest_main)
 
@@ -64,6 +65,7 @@ loki_add_test_executable(loki_commands_tests
         commands/audio_commands_test.cpp
         commands/transition_commands_test.cpp
         commands/clip_commands_test.cpp
+        commands/captions_multicam_test.cpp
         commands/edit_commands_test.cpp
         commands/effects_phase14_test.cpp
         commands/effect_commands_test.cpp
@@ -102,6 +104,7 @@ loki_add_test_executable(loki_playback_tests
         playback/effects_source_test.cpp
         playback/mixer_source_test.cpp
         playback/performance_test.cpp
+        playback/phase15_source_test.cpp
         playback/playback_test.cpp
         playback/retime_nest_source_test.cpp
         playback/sequence_source_test.cpp
@@ -113,6 +116,7 @@ loki_add_test_executable(loki_app_tests
         app/main_window_test.cpp
         ui/audio_panels_test.cpp
         ui/color_effects_test.cpp
+        ui/delivery_test.cpp
         ui/editing_tools_test.cpp
         ui/export_dialog_test.cpp
         ui/robustness_test.cpp

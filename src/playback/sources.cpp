@@ -313,6 +313,9 @@ std::optional<render::Layer> SequenceVideoSource::layerFor(const model::Clip& cl
         layer.adjustment = true;
     } else if (media.isNest()) {
         auto* nested = nestedSourceFor(clip, media);
+        if (nested != nullptr) {
+            nested->setSoloTrack(media.multicam ? clip.angle : -1); // a multicam clip shows one angle
+        }
         layer.nested = nested != nullptr ? nested->compositeAt(sourceTime) : nullptr;
         if (!layer.nested) {
             return std::nullopt;
@@ -364,6 +367,14 @@ std::optional<TimedFrame> SequenceVideoSource::compose(const Rational& requested
     if (t >= seq.duration()) {
         return std::nullopt;
     }
+    if (m_snapshot->multicamView) {
+        if (auto grid = multicamGrid(t)) {
+            return grid;
+        }
+    }
+    if (auto rendered = previewFrame(t)) {
+        return rendered;
+    }
     if (parallel) {
         prefetch(t);
     }
@@ -377,8 +388,9 @@ std::optional<TimedFrame> SequenceVideoSource::compose(const Rational& requested
         }
     };
     // V1 (index 0) is the bottom layer.
-    for (const auto& track : seq.videoTracks) {
-        if (track.state.hidden) {
+    for (std::size_t trackIndex = 0; trackIndex < seq.videoTracks.size(); ++trackIndex) {
+        const auto& track = seq.videoTracks[trackIndex];
+        if (track.state.hidden || (m_soloTrack >= 0 && static_cast<int>(trackIndex) != m_soloTrack)) {
             continue;
         }
         if (const auto active = model::activeTransition(track, t)) {
@@ -468,13 +480,171 @@ std::optional<TimedFrame> SequenceVideoSource::compose(const Rational& requested
         }
     }
     TimedFrame result{t, m_frameDuration, nullptr, nullptr};
+    for (auto it = composite->layers.rbegin(); it != composite->layers.rend() && !result.frame; ++it) {
+        result.frame = it->frame; // topmost decoded picture (may be none: nests, adjustments)
+    }
+    push(captionLayer(t));
     if (!composite->layers.empty()) {
-        for (auto it = composite->layers.rbegin(); it != composite->layers.rend() && !result.frame; ++it) {
-            result.frame = it->frame; // topmost decoded picture (may be none: nests, adjustments)
-        }
         result.composite = std::move(composite);
     }
     return result;
+}
+
+// --- Phase 15 -------------------------------------------------------------------------------------
+
+std::optional<render::Layer> SequenceVideoSource::captionLayer(const Rational& t) {
+    const auto& seq = m_snapshot->sequence;
+    if (!m_snapshot->showCaptions || seq.captions.empty()) {
+        return std::nullopt;
+    }
+    const model::Caption* caption = nullptr;
+    for (const auto& c : seq.captions) {
+        if (c.start <= t && t < c.end()) {
+            caption = &c;
+            break;
+        }
+    }
+    if (caption == nullptr || caption->text.empty()) {
+        return std::nullopt;
+    }
+    const auto& style = seq.captionStyle;
+    text::TitleSpec spec;
+    spec.text = caption->text;
+    spec.font = style.font;
+    spec.color = style.color;
+    spec.size = style.size;
+    spec.x = seq.settings.width / 2.0;
+    spec.y = seq.settings.height * style.positionY / 100.0;
+    spec.shadow = style.backgroundOpacity <= 0.0;
+    spec.backgroundOpacity = style.backgroundOpacity;
+    spec.canvasWidth = seq.settings.width;
+    spec.canvasHeight = seq.settings.height;
+    const std::string key = caption->text + '\x1f' + style.font + style.color + std::to_string(style.size) +
+                            std::to_string(style.positionY) + std::to_string(style.backgroundOpacity);
+    if (key != m_captionText || !m_captionFrame) {
+        m_captionText = key;
+        m_captionFrame = text::renderTitle(spec);
+    }
+    if (!m_captionFrame) {
+        return std::nullopt;
+    }
+    render::Layer layer;
+    layer.frame = m_captionFrame;
+    render::coverCanvas(layer, seq.settings.width, seq.settings.height);
+    layer.transform.opacity = 100.0;
+    return layer;
+}
+
+std::optional<TimedFrame> SequenceVideoSource::previewFrame(const Rational& t) {
+    const auto& previews = m_snapshot->previews;
+    if (!previews.length.isPositive() || previews.files.empty()) {
+        return std::nullopt;
+    }
+    const auto index = static_cast<std::size_t>(std::max<std::int64_t>(0, (t / previews.length).floor()));
+    if (index >= previews.files.size() || previews.files[index].empty()) {
+        return std::nullopt;
+    }
+    auto& decoder = m_previewDecoders[index];
+    if (!decoder) {
+        try {
+            media::VideoDecoderOptions options;
+            options.allowHardware = false;
+            options.maxWidth = m_maxWidth;
+            options.maxHeight = m_maxHeight;
+            decoder = std::make_unique<media::VideoDecoder>(previews.files[index], options);
+        } catch (const std::exception& e) {
+            spdlog::warn("Render preview unreadable ({}): {}", model::pathToUtf8(previews.files[index]), e.what());
+            m_previewDecoders.erase(index);
+            return std::nullopt;
+        }
+        // Few open previews at once: playback moves forward segment by segment.
+        for (auto it = m_previewDecoders.begin(); it != m_previewDecoders.end();) {
+            it = (it->first + 1 < index || it->first > index + 1) ? m_previewDecoders.erase(it) : std::next(it);
+        }
+    }
+    auto frame = decoder->frameAt(t - previews.length * Rational(static_cast<std::int64_t>(index)));
+    if (!frame) {
+        return std::nullopt;
+    }
+    const auto& seq = m_snapshot->sequence;
+    auto composite = std::make_shared<render::CompositeFrame>();
+    composite->width = seq.settings.width;
+    composite->height = seq.settings.height;
+    render::Layer layer;
+    layer.frame = frame;
+    render::coverCanvas(layer, seq.settings.width, seq.settings.height);
+    layer.transform.opacity = 100.0;
+    composite->layers.push_back(std::move(layer));
+    if (auto caption = captionLayer(t)) {
+        composite->layers.push_back(std::move(*caption));
+    }
+    return TimedFrame{t, m_frameDuration, frame, std::move(composite)};
+}
+
+std::optional<TimedFrame> SequenceVideoSource::multicamGrid(const Rational& t) {
+    const auto& seq = m_snapshot->sequence;
+    // The topmost multicam clip under the playhead.
+    const model::Clip* clip = nullptr;
+    const model::MediaItem* media = nullptr;
+    for (auto track = seq.videoTracks.rbegin(); track != seq.videoTracks.rend() && clip == nullptr; ++track) {
+        for (const auto& c : track->clips) {
+            const auto m = m_snapshot->media.find(c.media);
+            if (c.start <= t && t < c.end() && m != m_snapshot->media.end() && m->second.multicam) {
+                clip = &c;
+                media = &m->second;
+                break;
+            }
+        }
+    }
+    if (clip == nullptr) {
+        return std::nullopt;
+    }
+    const auto nested = m_snapshot->nested.find(media->sequence);
+    if (nested == m_snapshot->nested.end() || !nested->second) {
+        return std::nullopt;
+    }
+    if (m_gridMedia != media->id) {
+        m_gridSources.clear();
+        m_gridMedia = media->id;
+    }
+    const int angles = std::min<int>(9, static_cast<int>(nested->second->sequence.videoTracks.size()));
+    const int columns = angles <= 1 ? 1 : angles <= 4 ? 2 : 3;
+    const int rows = (angles + columns - 1) / columns;
+    const double cellW = static_cast<double>(seq.settings.width) / columns;
+    const double cellH = static_cast<double>(seq.settings.height) / rows;
+    auto composite = std::make_shared<render::CompositeFrame>();
+    composite->width = seq.settings.width;
+    composite->height = seq.settings.height;
+    const Rational sourceTime = clip->toSourceTime(t);
+    for (int i = 0; i < angles; ++i) {
+        auto& source = m_gridSources[i];
+        if (!source) {
+            auto snapshot = std::make_shared<SequenceSnapshot>(*nested->second);
+            snapshot->useProxies = m_snapshot->useProxies;
+            // Small decodes: each angle fills a cell.
+            source = std::make_unique<SequenceVideoSource>(std::move(snapshot), m_allowHardware,
+                                                           std::max(64, m_maxWidth > 0 ? m_maxWidth / columns : 640),
+                                                           std::max(36, m_maxHeight > 0 ? m_maxHeight / rows : 360), 2, false);
+            source->setTransparent(true);
+            source->setSoloTrack(i);
+        }
+        render::Layer layer;
+        layer.nested = source->compositeAt(sourceTime);
+        if (!layer.nested) {
+            continue;
+        }
+        layer.sourceWidth = layer.nested->width;
+        layer.sourceHeight = layer.nested->height;
+        const double scale = std::min(cellW / layer.sourceWidth, cellH / layer.sourceHeight);
+        layer.transform.scale = scale * 100.0;
+        layer.transform.positionX = cellW * (i % columns + 0.5);
+        layer.transform.positionY = cellH * (i / columns + 0.5);
+        layer.transform.anchorX = layer.sourceWidth / 2.0;
+        layer.transform.anchorY = layer.sourceHeight / 2.0;
+        layer.transform.opacity = i == clip->angle ? 100.0 : 70.0; // the live angle stands out
+        composite->layers.push_back(std::move(layer));
+    }
+    return TimedFrame{t, m_frameDuration, nullptr, std::move(composite)};
 }
 
 void SequenceVideoSource::seek(const Rational& t) {
@@ -584,12 +754,16 @@ bool sameExceptAudioMix(const SequenceSnapshot& a, const SequenceSnapshot& b) {
             track.state.pan = 0.0;
             track.state.muted = false;
             track.state.solo = false;
+            track.state.volumeAutomation.clear();
+            track.state.panAutomation.clear();
             track.transitions.clear(); // crossfades only change gains
             for (auto& clip : track.clips) {
                 clip.fadeIn = {};
                 clip.fadeOut = {};
+                // Clip audio effects read their parameters every block (D38): changing them needs no reload.
                 std::erase_if(clip.effects, [](const model::Effect& e) {
-                    return e.type == model::kVolumeEffect || e.type == model::kPannerEffect;
+                    return e.type == model::kVolumeEffect || e.type == model::kPannerEffect || e.type == model::kEqEffect ||
+                           e.type == model::kCompressorEffect || e.type == model::kNoiseReductionEffect;
                 });
             }
         }
@@ -648,13 +822,29 @@ void SequenceAudioSource::mixClip(const model::Clip& clip, const model::MediaIte
     const auto count = static_cast<std::size_t>(segEnd - segStart);
     m_scratch.assign(count * ch, 0.0f);
     std::int64_t got = 0;
+    const bool jumped = reader.nextFrame != segStart;
     if (clip.isRetimed()) {
         got = static_cast<std::int64_t>(readRetimed(reader, clip, segStart, count));
+        applyClipEffects(reader, clip, count, jumped);
     } else {
-        if (reader.nextFrame != segStart) {
+        if (jumped) {
             reader.source->seek(clip.toSourceTime(Rational(segStart, m_rate)));
+            applyClipEffects(reader, clip, 0, true);
+            // Noise reduction delays its output: feed it that much audio first so the result lines
+            // up with the picture (the source then reads that far ahead).
+            if (hasNoiseReduction(clip)) {
+                std::vector<float> preroll(audio::NoiseReducer::latency() * ch, 0.0f);
+                (void)reader.source->read(preroll.data(), audio::NoiseReducer::latency());
+                std::swap(m_scratch, preroll);
+                applyClipEffects(reader, clip, audio::NoiseReducer::latency(), false);
+                std::swap(m_scratch, preroll);
+            }
         }
         got = static_cast<std::int64_t>(reader.source->read(m_scratch.data(), count));
+        if (hasNoiseReduction(clip)) {
+            got = static_cast<std::int64_t>(count); // the delayed tail keeps sounding past the source end
+        }
+        applyClipEffects(reader, clip, count, false);
     }
     reader.nextFrame = segEnd;
 
@@ -725,6 +915,57 @@ void SequenceAudioSource::ensureWindow(ClipReader& reader, std::int64_t lo, std:
     readInto(start, std::max<std::int64_t>(hi - start, chunk));
 }
 
+bool SequenceAudioSource::hasNoiseReduction(const model::Clip& clip) {
+    const auto* e = model::findEffectByType(clip, model::kNoiseReductionEffect);
+    return e != nullptr && e->enabled;
+}
+
+void SequenceAudioSource::applyClipEffects(ClipReader& reader, const model::Clip& clip, std::size_t frames, bool reset) {
+    if (reset || !reader.effectsPrimed) {
+        reader.eq.reset();
+        reader.compressor.reset();
+        reader.noise.reset();
+        reader.effectsPrimed = true;
+    }
+    if (frames == 0) {
+        return;
+    }
+    // Static parameters (the EQ gains may be animated: evaluated once per block).
+    const Rational t = clip.toSourceTime(clip.start);
+    const auto value = [&](std::string_view type, const char* key, double fallback) {
+        const auto* e = model::findEffectByType(clip, type);
+        const auto* p = e != nullptr ? e->findParameter(key) : nullptr;
+        return static_cast<float>(p != nullptr ? p->valueAt(t) : fallback);
+    };
+    float* data = m_scratch.data();
+    if (const auto* e = model::findEffectByType(clip, model::kEqEffect); e != nullptr && e->enabled) {
+        audio::EqParams p;
+        p.lowGainDb = value(model::kEqEffect, "lowGain", 0);
+        p.lowFreq = value(model::kEqEffect, "lowFreq", 100);
+        p.midGainDb = value(model::kEqEffect, "midGain", 0);
+        p.midFreq = value(model::kEqEffect, "midFreq", 1000);
+        p.midQ = value(model::kEqEffect, "midQ", 1);
+        p.highGainDb = value(model::kEqEffect, "highGain", 0);
+        p.highFreq = value(model::kEqEffect, "highFreq", 8000);
+        reader.eq.setParams(p, m_rate);
+        reader.eq.process(data, frames, m_channels);
+    }
+    if (const auto* e = model::findEffectByType(clip, model::kCompressorEffect); e != nullptr && e->enabled) {
+        audio::CompressorParams p;
+        p.thresholdDb = value(model::kCompressorEffect, "threshold", -20);
+        p.ratio = value(model::kCompressorEffect, "ratio", 4);
+        p.attackMs = value(model::kCompressorEffect, "attack", 10);
+        p.releaseMs = value(model::kCompressorEffect, "release", 120);
+        p.makeupDb = value(model::kCompressorEffect, "makeup", 0);
+        reader.compressor.setParams(p, m_rate);
+        reader.compressor.process(data, frames, m_channels);
+    }
+    if (hasNoiseReduction(clip)) {
+        reader.noise.setParams(value(model::kNoiseReductionEffect, "reduction", 12), m_channels);
+        reader.noise.process(data, frames, m_channels);
+    }
+}
+
 std::size_t SequenceAudioSource::readRetimed(ClipReader& reader, const model::Clip& clip, std::int64_t segStart,
                                              std::size_t count) {
     if (clip.speed.isZero()) {
@@ -741,6 +982,31 @@ std::size_t SequenceAudioSource::readRetimed(ClipReader& reader, const model::Cl
         const double offset = (f - clipStart) * speed;
         return clip.reverse ? sourceOut - offset : sourceIn + offset;
     };
+    // Maintain Audio Pitch (D38): WSOLA grains instead of resampling.
+    if (clip.maintainPitch && !clip.reverse) {
+        const auto ch64 = static_cast<std::int64_t>(ch);
+        const auto fetch = [&](std::int64_t pos, std::size_t frames, float* out) {
+            std::fill_n(out, frames * ch, 0.0f);
+            const auto lo = std::max<std::int64_t>(0, pos);
+            const auto hi = pos + static_cast<std::int64_t>(frames);
+            if (hi <= lo) {
+                return;
+            }
+            // Keep some history: grains look a little back for their best fit.
+            ensureWindow(reader, std::max<std::int64_t>(0, lo - 4096), hi, false);
+            const auto have = static_cast<std::int64_t>(reader.window.size()) / ch64;
+            for (std::int64_t f = lo; f < hi; ++f) {
+                const auto i = f - reader.windowStart;
+                if (i < 0 || i >= have) {
+                    continue;
+                }
+                std::copy_n(reader.window.data() + i * ch64, ch, out + (f - pos) * ch64);
+            }
+        };
+        reader.stretcher.render(segStart, count, m_channels,
+                                [&](std::int64_t f) { return position(static_cast<double>(f)); }, fetch, m_scratch.data());
+        return count;
+    }
     const double p0 = position(static_cast<double>(segStart));
     const double p1 = position(static_cast<double>(segStart) + static_cast<double>(count));
     const auto lo = std::max<std::int64_t>(0, static_cast<std::int64_t>(std::floor(std::min(p0, p1))) - 1);
@@ -834,7 +1100,24 @@ std::size_t SequenceAudioSource::read(float* out, std::size_t frames) {
             }
             mixClip(clip, media->second, segStart, segEnd, blockStart, m_bus.data(), spans);
         }
-        audio::applyRamp(m_bus.data(), nFrames, m_channels, from, target);
+        if (audible && (!track.state.volumeAutomation.empty() || !track.state.panAutomation.empty())) {
+            // Track automation (D39): the fader follows its keyframes, ramped every kGainStep frames.
+            const auto gainAt = [&](std::int64_t frame) {
+                const Rational at(frame, m_rate);
+                return audio::balanceGains(track.state.panAt(at)) * audio::dbToGain(track.state.volumeAt(at));
+            };
+            audio::StereoGains g = (inserted || !m_rampsValid) ? gainAt(blockStart) : from;
+            for (std::int64_t f = blockStart; f < blockEnd; f += kGainStep) {
+                const auto stepEnd = std::min(blockEnd, f + kGainStep);
+                const auto next = gainAt(stepEnd);
+                audio::applyRamp(m_bus.data() + static_cast<std::size_t>(f - blockStart) * ch,
+                                 static_cast<std::size_t>(stepEnd - f), m_channels, g, next);
+                g = next;
+            }
+            prev->second = g;
+        } else {
+            audio::applyRamp(m_bus.data(), nFrames, m_channels, from, target);
+        }
         m_levels.push_back({track.id, audio::measure(m_bus.data(), nFrames, m_channels)});
         for (std::size_t i = 0; i < nFrames * ch; ++i) {
             out[i] += m_bus[i];

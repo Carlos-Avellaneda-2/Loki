@@ -26,8 +26,11 @@ void migrate1to2(json&) {}
 void migrate2to3(json&) {}
 // v3 -> v4: only additions (effect masks, curves, analysis samples); v3 documents are valid.
 void migrate3to4(json&) {}
+// v4 -> v5: only additions (automation, captions, multicam, maintain pitch); v4 documents are valid.
+void migrate4to5(json&) {}
 
-constexpr std::array<Migration, kProjectFormatVersion - 1> kMigrations{&migrate1to2, &migrate2to3, &migrate3to4};
+constexpr std::array<Migration, kProjectFormatVersion - 1> kMigrations{&migrate1to2, &migrate2to3, &migrate3to4,
+                                                                       &migrate4to5};
 
 // ---------------------------------------------------------------------------------------------
 // Writing
@@ -177,6 +180,13 @@ json clipToJson(const Clip& clip) {
     if (clip.reverse) {
         j["reverse"] = true;
     }
+    // v5 (D38, D43).
+    if (clip.maintainPitch) {
+        j["maintainPitch"] = true;
+    }
+    if (clip.angle != 0) {
+        j["angle"] = clip.angle;
+    }
     return j;
 }
 
@@ -212,6 +222,13 @@ json trackToJson(const Track& track) {
     }
     if (track.state.solo) {
         j["solo"] = true;
+    }
+    // v5 (D39): automation keyframes in sequence time.
+    if (!track.state.volumeAutomation.empty()) {
+        j["volumeAutomation"] = parameterToJson({"volume", track.state.volumeDb, track.state.volumeAutomation});
+    }
+    if (!track.state.panAutomation.empty()) {
+        j["panAutomation"] = parameterToJson({"pan", track.state.pan, track.state.panAutomation});
     }
     return j;
 }
@@ -259,6 +276,9 @@ json mediaToJson(const MediaItem& m, const std::filesystem::path& projectDir) {
     }
     if (!m.markers.empty()) {
         j["markers"] = markersToJson(m.markers);
+    }
+    if (m.multicam) {
+        j["multicam"] = true;
     }
     return j;
 }
@@ -445,6 +465,9 @@ private:
         }
         if (j.contains("sequence")) {
             m.sequence = id<SequenceId>(j, "sequence", at, true);
+        }
+        if (j.contains("multicam")) {
+            m.multicam = boolean(j, "multicam", at);
         }
         m.markers = readMarkers(j, at);
         return m;
@@ -635,6 +658,12 @@ private:
         if (j.contains("reverse")) {
             c.reverse = boolean(j, "reverse", at);
         }
+        if (j.contains("maintainPitch")) {
+            c.maintainPitch = boolean(j, "maintainPitch", at);
+        }
+        if (j.contains("angle")) {
+            c.angle = integer(j, "angle", at);
+        }
         const auto& effects = array(j, "effects", at);
         for (std::size_t i = 0; i < effects.size(); ++i) {
             c.effects.push_back(readEffect(effects[i], at + "/effects/" + std::to_string(i)));
@@ -673,6 +702,12 @@ private:
         if (j.contains("solo")) {
             t.state.solo = boolean(j, "solo", at);
         }
+        if (j.contains("volumeAutomation")) {
+            t.state.volumeAutomation = readParameter(field(j, "volumeAutomation", at), at + "/volumeAutomation").keyframes;
+        }
+        if (j.contains("panAutomation")) {
+            t.state.panAutomation = readParameter(field(j, "panAutomation", at), at + "/panAutomation").keyframes;
+        }
         const auto& clips = array(j, "clips", at);
         for (std::size_t i = 0; i < clips.size(); ++i) {
             t.clips.push_back(readClip(clips[i], at + "/clips/" + std::to_string(i)));
@@ -708,6 +743,28 @@ private:
             s.masterVolumeDb = number(j, "masterVolumeDb", at);
         }
         s.markers = readMarkers(j, at);
+        if (j.contains("captions")) {
+            const auto& list = array(j, "captions", at);
+            for (std::size_t i = 0; i < list.size(); ++i) {
+                const std::string cAt = at + "/captions/" + std::to_string(i);
+                Caption c;
+                c.id = id<CaptionId>(list[i], "id", cAt, false);
+                c.start = rational(list[i], "start", cAt);
+                c.duration = rational(list[i], "duration", cAt);
+                c.text = string(list[i], "text", cAt);
+                s.captions.push_back(std::move(c));
+            }
+        }
+        if (j.contains("captionStyle")) {
+            const auto& st = field(j, "captionStyle", at);
+            const std::string sAt2 = at + "/captionStyle";
+            s.captionStyle.font = string(st, "font", sAt2);
+            s.captionStyle.size = number(st, "size", sAt2);
+            s.captionStyle.color = string(st, "color", sAt2);
+            s.captionStyle.backgroundOpacity = number(st, "backgroundOpacity", sAt2);
+            s.captionStyle.positionY = number(st, "positionY", sAt2);
+            s.captionStyle.visible = boolean(st, "visible", sAt2);
+        }
         return s;
     }
 
@@ -722,6 +779,18 @@ std::filesystem::path projectDirOf(const std::filesystem::path& projectFile) {
 }
 
 } // namespace
+
+std::string canonicalClip(const Clip& clip) {
+    return clipToJson(clip).dump();
+}
+
+std::string canonicalTrack(const Track& track) {
+    return trackToJson(track).dump();
+}
+
+std::string canonicalMedia(const MediaItem& media) {
+    return mediaToJson(media, {}).dump();
+}
 
 std::string pathToUtf8(const std::filesystem::path& path) {
     const auto u8 = path.generic_u8string();
@@ -773,6 +842,25 @@ json toJson(const Project& project, const std::filesystem::path& projectFile) {
         }
         if (!s.markers.empty()) {
             seqJson["markers"] = markersToJson(s.markers);
+        }
+        if (!s.captions.empty()) {
+            json captions = json::array();
+            for (const auto& c : s.captions) {
+                captions.push_back({{"id", idToJson(c.id)},
+                                    {"start", rationalToJson(c.start)},
+                                    {"duration", rationalToJson(c.duration)},
+                                    {"text", c.text}});
+            }
+            seqJson["captions"] = std::move(captions);
+        }
+        if (s.captionStyle != CaptionStyle{}) {
+            const auto& st = s.captionStyle;
+            seqJson["captionStyle"] = {{"font", st.font},
+                                       {"size", st.size},
+                                       {"color", st.color},
+                                       {"backgroundOpacity", st.backgroundOpacity},
+                                       {"positionY", st.positionY},
+                                       {"visible", st.visible}};
         }
         sequences.push_back(std::move(seqJson));
     }

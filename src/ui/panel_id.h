@@ -18,13 +18,15 @@ enum class PanelId {
     Effects,
     Markers,
     Scopes,
+    Captions,
+    ExportQueue,
 };
 
 inline constexpr std::array kAllPanels = {
     PanelId::Project,        PanelId::SourceMonitor,  PanelId::ProgramMonitor,
     PanelId::Timeline,       PanelId::EffectControls, PanelId::AudioMeters,
     PanelId::AudioMixer,     PanelId::Effects,        PanelId::Markers,
-    PanelId::Scopes,
+    PanelId::Scopes,         PanelId::Captions,       PanelId::ExportQueue,
 };
 
 // Stable, non-translatable identifier used as QObject::objectName and in saved layouts.
@@ -40,6 +42,8 @@ constexpr std::string_view panelObjectName(PanelId id) noexcept {
     case PanelId::Effects: return "panel.effects";
     case PanelId::Markers: return "panel.markers";
     case PanelId::Scopes: return "panel.scopes";
+    case PanelId::Captions: return "panel.captions";
+    case PanelId::ExportQueue: return "panel.exportQueue";
     }
     return "panel.unknown";
 }
@@ -57,6 +61,8 @@ constexpr std::string_view panelTitle(PanelId id) noexcept {
     case PanelId::Effects: return "Effects";
     case PanelId::Markers: return "Markers";
     case PanelId::Scopes: return "Lumetri Scopes";
+    case PanelId::Captions: return "Captions";
+    case PanelId::ExportQueue: return "Export Queue";
     }
     return "Unknown";
 }

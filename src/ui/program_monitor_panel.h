@@ -50,6 +50,18 @@ public:
 
     // Publishes the current sequence state to the engine now (normally automatic).
     void publishSnapshot();
+    // Render previews (D42) are looked up in this folder.
+    void setPreviewCacheDir(const QString& dir);
+    [[nodiscard]] const QString& previewCacheDir() const noexcept { return m_previewDir; }
+    // Multi-camera view (D43): the angles of the multicam clip under the playhead in a grid.
+    void setMulticamView(bool on);
+    [[nodiscard]] bool multicamView() const noexcept { return m_multicamView; }
+
+signals:
+    // Keys 1-9 (D43): cut to that camera (0-based) at the playhead.
+    void cameraRequested(int angle);
+
+public:
     void tick();
     [[nodiscard]] QString timecodeText() const;
 
@@ -77,6 +89,8 @@ private:
     QComboBox* m_quality = nullptr;
     QHBoxLayout* m_info = nullptr;
     bool m_useProxies = false;
+    QString m_previewDir;
+    bool m_multicamView = false;
     QTimer* m_timer = nullptr;
 };
 

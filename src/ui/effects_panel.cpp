@@ -61,6 +61,15 @@ EffectsPanel::EffectsPanel(QWidget* parent) : QWidget(parent) {
             item->setToolTip(0, tr("Drag onto a video clip, or double-click to apply to the selected clips"));
         }
     }
+    auto* audio = folder(tr("Audio Effects"));
+    for (const auto& def : model::effectRegistry()) {
+        if (!def.fixed && def.kind == model::TrackKind::Audio) {
+            auto* item = new QTreeWidgetItem(audio, {qs(def.label)});
+            item->setData(0, kTypeRole, qs(def.type));
+            item->setData(0, kTransitionRole, false);
+            item->setToolTip(0, tr("Drag onto an audio clip, or double-click to apply to the selected clips"));
+        }
+    }
     auto* videoTransitions = folder(tr("Video Transitions"));
     auto* audioTransitions = folder(tr("Audio Transitions"));
     for (const auto& def : model::transitionRegistry()) {

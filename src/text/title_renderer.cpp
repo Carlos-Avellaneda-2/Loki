@@ -29,6 +29,13 @@ media::VideoFramePtr renderTitle(const TitleSpec& spec) {
         // Centered block around (x, y); the rectangle is large enough for any canvas.
         const QRectF box(spec.x - spec.canvasWidth * 2.0, spec.y - spec.canvasHeight * 2.0, spec.canvasWidth * 4.0,
                          spec.canvasHeight * 4.0);
+        if (spec.backgroundOpacity > 0.0 && !text.isEmpty()) {
+            const double pad = spec.size * 0.25;
+            const QRectF bounds = p.boundingRect(box, Qt::AlignCenter, text).adjusted(-pad, -pad * 0.5, pad, pad * 0.5);
+            QColor fill(Qt::black);
+            fill.setAlphaF(static_cast<float>(std::clamp(spec.backgroundOpacity / 100.0, 0.0, 1.0)));
+            p.fillRect(bounds, fill);
+        }
         if (spec.shadow && spec.shadowOpacity > 0.0) {
             const double d = spec.shadowDistance / std::sqrt(2.0);
             QColor shadow(Qt::black);

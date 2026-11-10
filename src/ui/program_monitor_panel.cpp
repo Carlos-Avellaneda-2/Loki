@@ -1,5 +1,7 @@
 #include "ui/program_monitor_panel.h"
 
+#include "playback/render_previews.h"
+
 #include "ui/project_controller.h"
 #include "ui/scrub_bar.h"
 #include "ui/sequence_edits.h"
@@ -145,6 +147,12 @@ void ProgramMonitorPanel::registerShortcuts(ShortcutManager& s) {
     add("clearMarks", tr("Clear In and Out"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_X),
         [this] { sequence_edits::clearMarks(m_controller, m_sequence); });
     add("lift", tr("Lift"), QKeySequence(Qt::Key_Semicolon), [this] { sequence_edits::lift(m_controller, m_sequence); });
+    for (int i = 0; i < 9; ++i) {
+        const std::string id = "camera" + std::to_string(i + 1);
+        add(id.c_str(), tr("Cut to Camera %1").arg(i + 1), QKeySequence(Qt::Key_1 + i), [this, i] { emit cameraRequested(i); });
+    }
+    add("multicamView", tr("Toggle Multi-Camera View"), QKeySequence(Qt::SHIFT | Qt::Key_0),
+        [this] { setMulticamView(!m_multicamView); });
     add("extract", tr("Extract"), QKeySequence(Qt::Key_Apostrophe),
         [this] { sequence_edits::extract(m_controller, m_sequence); });
 }
@@ -190,11 +198,28 @@ void ProgramMonitorPanel::publishSnapshot() {
     }
     auto snapshot = playback::makeSnapshot(project, m_sequence, ++m_generation);
     snapshot->useProxies = m_useProxies;
+    snapshot->showCaptions = seq->captionStyle.visible;
+    snapshot->multicamView = m_multicamView;
+    if (!m_previewDir.isEmpty()) {
+        playback::attachPreviews(*snapshot, std::filesystem::path(m_previewDir.toStdWString()));
+    }
     m_title->setText(qs(seq->name));
     m_scrub->setTiming(seq->duration(), seq->settings.frameRate);
     m_scrub->setMarks(seq->markIn, seq->markOut);
     m_durationLabel->setText(timecode(seq->duration(), seq->settings.frameRate));
     m_engine->openSequence(std::move(snapshot));
+}
+
+void ProgramMonitorPanel::setPreviewCacheDir(const QString& dir) {
+    m_previewDir = dir;
+    schedulePublish();
+}
+
+void ProgramMonitorPanel::setMulticamView(bool on) {
+    if (m_multicamView != on) {
+        m_multicamView = on;
+        publishSnapshot();
+    }
 }
 
 void ProgramMonitorPanel::onQualityChanged(int index) {

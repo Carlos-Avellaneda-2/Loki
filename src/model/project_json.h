@@ -13,9 +13,10 @@ namespace loki::model {
 
 // On-disk format of `.loki` project files (JSON). Bump when the schema changes and add a
 // migration step in project_json.cpp (vN -> vN+1).
-inline constexpr int kProjectFormatVersion = 4; // 2: transitions, generated media, text params (D20)
+inline constexpr int kProjectFormatVersion = 5; // 2: transitions, generated media, text params (D20)
                                                 // 3: clip speed, markers, nested sequences (D28-D31)
                                                 // 4: effect masks, curves, analysis data (D33-D36)
+                                                // 5: track automation, captions, multicam, pitch (D38-D43)
 inline constexpr std::string_view kProjectFormatName = "loki-project";
 inline constexpr std::string_view kProjectFileExtension = ".loki";
 
@@ -41,6 +42,12 @@ void saveProjectFile(const Project& project, const std::filesystem::path& file);
 // Upgrades `json` in place to kProjectFormatVersion. Returns the version it had.
 // Throws ProjectFormatError for missing/unknown/newer versions.
 int migrateProjectJson(nlohmann::json& json);
+
+// Canonical JSON text of one clip / track / media item (render preview keys, D42): equal values give
+// equal text.
+[[nodiscard]] std::string canonicalClip(const Clip& clip);
+[[nodiscard]] std::string canonicalTrack(const Track& track);
+[[nodiscard]] std::string canonicalMedia(const MediaItem& media);
 
 // UTF-8 <-> path helpers (paths are stored as UTF-8 with '/' separators).
 [[nodiscard]] std::string pathToUtf8(const std::filesystem::path& path);

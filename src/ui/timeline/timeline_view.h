@@ -1,8 +1,10 @@
 #pragma once
 
 #include "commands/clip_commands.h"
+#include "commands/caption_commands.h"
 #include "commands/edit_commands.h"
 #include "model/types.h"
+#include "playback/render_previews.h"
 #include "ui/timeline/timeline_geometry.h"
 
 #include <QWidget>
@@ -10,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <map>
 #include <set>
 
 class QMimeData;
@@ -109,6 +112,11 @@ public:
     void addFrameHold();
     // Nest (D30): moves the selection into a new sequence; asks for its name.
     void nestSelection();
+    // Render bar (D42): state of each preview segment of `segmentLength`.
+    void setPreviewStates(std::vector<playback::PreviewState> states, Rational segmentLength);
+    // Track automation (D39): which keyframes an audio track shows (none by default).
+    void showTrackAutomation(model::TrackId track, std::optional<commands::AutomationKind> kind);
+    [[nodiscard]] std::optional<commands::AutomationKind> trackAutomation(model::TrackId track) const;
 
 signals:
     void statusMessage(const QString& text);
@@ -135,7 +143,7 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 private:
-    enum class Drag { None, Scrub, Move, TrimIn, TrimOut, Slip, Slide, Volume, FadeIn, FadeOut };
+    enum class Drag { None, Scrub, Move, TrimIn, TrimOut, Slip, Slide, Volume, FadeIn, FadeOut, Automation };
 
     // Audio clip overlays (Selection tool): volume line and fade handles.
     enum class AudioHandle { None, Level, FadeIn, FadeOut };
@@ -209,6 +217,17 @@ private:
     model::TransitionId m_selectedTransition;
     // Transition boxes painted in the last paintEvent (hit testing).
     std::vector<std::pair<QRectF, model::TransitionId>> m_transitionRects;
+    std::vector<playback::PreviewState> m_previewStates;
+    std::map<model::TrackId, commands::AutomationKind> m_automation;
+    model::TrackId m_autoTrack;
+    Rational m_autoKey;
+    void paintAutomation(QPainter& p, const TrackRow& row, const model::Track& track) const;
+    [[nodiscard]] QRectF automationArea(const TrackRow& row) const;
+    [[nodiscard]] double automationY(const QRectF& area, commands::AutomationKind kind, double value) const;
+    [[nodiscard]] double automationValue(const QRectF& area, commands::AutomationKind kind, double y) const;
+    // Handles a press on a track that shows automation; true when used.
+    bool automationPress(const TrackRow& row, const QPoint& pos, bool ctrl);
+    Rational m_previewSegment;
     void paintTransitions(QPainter& p, const TrackRow& row, const model::Track& track);
 };
 

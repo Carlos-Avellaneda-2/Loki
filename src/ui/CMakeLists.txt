@@ -27,8 +27,12 @@ add_library(loki_ui STATIC
     project_item_model.cpp
     project_panel.h
     project_panel.cpp
+    captions_panel.h
+    captions_panel.cpp
     curve_editor.h
     curve_editor.cpp
+    export_queue.h
+    export_queue.cpp
     marker_dialog.h
     mask_overlay.h
     mask_overlay.cpp

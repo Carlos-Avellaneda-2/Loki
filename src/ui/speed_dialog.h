@@ -19,11 +19,13 @@ class SpeedDialog final : public QDialog {
 
 public:
     // `span`: source time the clip covers; `frameRate`: sequence rate (timecode).
-    SpeedDialog(Rational span, Rational frameRate, double speedPercent, bool reverse, QWidget* parent = nullptr);
+    SpeedDialog(Rational span, Rational frameRate, double speedPercent, bool reverse, QWidget* parent = nullptr,
+                bool maintainPitch = false);
 
     [[nodiscard]] double speedPercent() const;
     [[nodiscard]] bool reverse() const;
     [[nodiscard]] bool ripple() const;
+    [[nodiscard]] bool maintainPitch() const;
     // Speed as an exact ratio (1 = 100 %), rounded to 1/100 %.
     [[nodiscard]] Rational speed() const;
 
@@ -38,6 +40,7 @@ private:
     QLabel* m_error = nullptr;
     QCheckBox* m_reverse = nullptr;
     QCheckBox* m_ripple = nullptr;
+    QCheckBox* m_pitch = nullptr;
     bool m_updating = false;
 };
 

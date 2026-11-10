@@ -13,6 +13,7 @@ class QAction;
 class QCloseEvent;
 class QMenu;
 class QSettings;
+class QTimer;
 
 namespace loki::ui {
 class AudioMetersPanel;
@@ -29,6 +30,9 @@ class ProgramMonitorPanel;
 class EffectControlsPanel;
 class MarkersPanel;
 class MaskOverlay;
+class CaptionsPanel;
+class ExportQueue;
+class ExportQueuePanel;
 class ScopesPanel;
 namespace timeline {
 class TimelinePanel;
@@ -50,7 +54,7 @@ class MainWindow final : public QMainWindow {
 
 public:
     // Bump when the default panel set changes so stale saved layouts are ignored.
-    static constexpr int kLayoutVersion = 4; // 2: Audio Track Mixer, 3: Effects, 4: Markers + Scopes
+    static constexpr int kLayoutVersion = 5; // 2: Audio Track Mixer, 3: Effects, 4: Markers + Scopes, 5: Captions + Export Queue
 
     // playbackOptions: tests inject a fake audio device / clock.
     explicit MainWindow(QWidget* parent = nullptr, playback::PlaybackOptions playbackOptions = {});
@@ -85,6 +89,16 @@ public:
     [[nodiscard]] ui::MarkersPanel* markersPanel() const noexcept { return m_markers; }
     [[nodiscard]] ui::ScopesPanel* scopesPanel() const noexcept { return m_scopes; }
     [[nodiscard]] ui::MaskOverlay* maskOverlay() const noexcept { return m_maskOverlay; }
+    [[nodiscard]] ui::CaptionsPanel* captionsPanel() const noexcept { return m_captions; }
+    [[nodiscard]] ui::ExportQueue* exportQueue() const noexcept { return m_exportQueue; }
+    // Sequence > Render In to Out (D42): queues the segments that are not rendered yet; returns how many.
+    int renderPreviews();
+    void deleteRenderFiles();
+    [[nodiscard]] QString previewCacheDir() const;
+    // Clip > Create Multi-Camera Source Sequence (D43) from the media selected in the Project panel.
+    bool createMulticamSource(const std::vector<model::MediaId>& angles);
+    // Cuts the multicam clip under the playhead to `angle` (keys 1-9).
+    void switchCamera(int angle);
     // Sequence > Add Adjustment Layer (D31): at the playhead, above the targeted video track.
     void newAdjustmentLayer();
     // Sequence > Delete Sequence: also removes nested-sequence items that show it (D30).
@@ -153,6 +167,11 @@ private:
     ui::MarkersPanel* m_markers = nullptr;              // owned by its dock widget
     ui::ScopesPanel* m_scopes = nullptr;                // owned by its dock widget
     ui::MaskOverlay* m_maskOverlay = nullptr;           // owned by this window (Qt parent)
+    ui::CaptionsPanel* m_captions = nullptr;            // owned by its dock widget
+    ui::ExportQueue* m_exportQueue = nullptr;           // owned by this window (Qt parent)
+    ui::ExportQueuePanel* m_exportQueuePanel = nullptr; // owned by its dock widget
+    QTimer* m_previewStateTimer = nullptr;              // debounces the timeline render bar
+    void updatePreviewStates();
     ui::AudioMetersPanel* m_audioMeters = nullptr;      // owned by its dock widget
     ui::AudioMixerPanel* m_audioMixer = nullptr;        // owned by its dock widget
     ui::EffectsPanel* m_effects = nullptr;              // owned by its dock widget

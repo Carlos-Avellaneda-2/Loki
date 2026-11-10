@@ -34,7 +34,7 @@ Para otra carpeta: `-Dir D:\Apps\Loki`. Para desinstalar: Configuración de Wind
 - Windows 10/11 de 64 bits y una GPU con OpenGL 3.3.
 - Con dos núcleos alcanza para 1080p30 con 2 pistas de video y 2 de audio. Para más pistas, usa la calidad 1/2 o
   proxies.
-- Un equipo con 8 hilos o más y 12 GB de RAM entra solo en el modo de rendimiento **High** (sección 12): cachés más
+- Un equipo con 8 hilos o más y 12 GB de RAM entra solo en el modo de rendimiento **High** (sección 13): cachés más
   grandes, más capas de video y decodificación en paralelo.
 
 ## 2. La ventana
@@ -54,6 +54,8 @@ pestaña del panel). Window muestra u oculta cada panel.
 | **Audio Meters** | Nivel de lo que suena (pico y RMS). |
 | **Markers** | Lista de los marcadores de la secuencia. |
 | **Lumetri Scopes** | Waveform, RGB parade, vectorscopio e histograma del monitor de programa. |
+| **Captions** | Subtítulos de la secuencia: texto, tiempos, estilo, importar y exportar `.srt`. |
+| **Export Queue** | Exportaciones y renders en fila, con progreso. |
 
 **Workspaces:** Window > Workspaces.
 - **Editing**: el montaje general.
@@ -387,6 +389,27 @@ Controls:
 - **Audio Meters:** pico y RMS de lo que suena. La luz roja de arriba indica saturación (0 dBFS); haz clic en el
   medidor para apagarla.
 
+### Efectos de audio
+
+Arrastra desde Effects > **Audio Effects** a un clip de audio:
+- **Parametric Equalizer:** graves (low shelf), medios (banda con Q) y agudos (high shelf), ±24 dB.
+- **Dynamics (Compressor):** umbral, ratio, ataque, relajación y ganancia de compensación.
+- **Noise Reduction:** aprende el ruido de fondo constante (aire acondicionado, zumbido) y lo baja. **Reduction**
+  dice cuánto, hasta 40 dB. Funciona mejor con voz; un tono constante también se trata como ruido.
+
+### Automatización de pista
+
+Clic derecho en la cabecera de una pista de audio > **Show Track Keyframes > Volume** (o **Pan**). Aparece una línea
+naranja sobre toda la pista:
+- **Ctrl+clic** en la pista agrega o quita un keyframe.
+- Arrastra un keyframe arriba o abajo para su valor, o a los lados para moverlo (un solo Ctrl+Z).
+- Con keyframes, la pista sigue esa línea en lugar del fader del mezclador. **Clear Track Keyframes** los borra.
+
+### Tono al cambiar la velocidad
+
+En Speed/Duration (Ctrl+R), **Maintain Audio Pitch** mantiene el tono del audio aunque el clip vaya más rápido o
+más lento. Sin la casilla el audio sube o baja de tono, como una cinta.
+
 ## 10. Proxies (edición fluida con medios pesados)
 
 1. En el panel Project, selecciona los medios, clic derecho > **Create Proxy (720p)**. Se generan en segundo plano y
@@ -413,14 +436,45 @@ La exportación **siempre** usa los originales. El sonido sale siempre del origi
 
    - **Output File**: dónde se guarda.
    - **Range**: toda la secuencia, o de la marca In a la Out.
+   - **Captions**: sin subtítulos, **quemados** en el video, o un archivo **.srt** al lado del video.
 3. **Export**. La barra muestra el progreso y puedes seguir usando Loki mientras exporta. **Cancel** detiene la
    exportación y borra el archivo a medias.
+4. **Queue** en vez de Export: la exportación entra al panel **Export Queue** y el diálogo se cierra. Las
+   exportaciones de la cola corren una tras otra mientras sigues editando; **Cancel** y **Clear Finished** están
+   en el panel.
 
 Loki elige solo el codificador H.264: NVIDIA (NVENC), Intel (QSV), AMD (AMF) o, si no hay ninguno, OpenH264 por
 software. Las transiciones, el color, los LUT, los títulos y la mezcla de audio se exportan igual que se ven en el
 monitor de programa.
 
-## 12. Preferencias
+### Subtítulos
+
+Panel **Captions** (pestaña junto a Project):
+- **Add at Playhead** crea un subtítulo de 3 s en el cabezal. Escribe el texto abajo y pulsa **Apply Text**.
+- Clic en un subtítulo de la lista lleva el cabezal ahí. **Delete** lo borra.
+- **Import SRT…** reemplaza los subtítulos por los de un archivo `.srt`; **Export SRT…** los guarda.
+- Estilo de la secuencia: fuente, tamaño, color, fondo (opacidad de la caja negra), posición vertical y si se ven
+  en los monitores.
+
+### Render de previsualización
+
+Si un tramo con muchos efectos no se reproduce fluido, Sequence > **Render In to Out** (Ctrl+Enter) lo renderiza en
+segundo plano (todo, o entre las marcas In y Out). La línea bajo la regla del timeline se pone **verde** donde
+está renderizado y **roja** donde no. Cualquier cambio en un tramo lo vuelve rojo. **Delete Render Files** borra los
+renders (están en la carpeta de caché, subcarpeta `render`).
+
+## 12. Multicámara
+
+1. En el panel Project selecciona de 2 a 9 clips de video (las cámaras, empezando a la vez) y elige Clip >
+   **Create Multi-Camera Source Sequence**. Aparece un ítem multicámara en el proyecto.
+2. Llévalo al timeline como cualquier clip.
+3. Sequence > **Multi-Camera View** (o Shift+0 en el monitor de programa) muestra todas las cámaras en una grilla; la
+   activa se ve más brillante.
+4. Reproduce y pulsa **1** a **9** para cortar a esa cámara en el cabezal. Cada corte se puede deshacer.
+
+En un equipo de 2 núcleos, con 4 cámaras o más usa proxies (sección 10) o la calidad 1/2 o 1/4.
+
+## 13. Preferencias
 
 Edit > Preferences…:
 - **Media Cache folder**: dónde se guardan miniaturas, formas de onda, proxies y autoguardados. **Clean Cache** la
@@ -434,7 +488,7 @@ Edit > Preferences…:
   | **Standard** | Portátiles de 2 a 4 núcleos | Caché de 384 MB, 8 capas de video abiertas, decodifica capa por capa |
   | **High** | Equipos potentes | Caché de 1/8 de la RAM (hasta 4 GB), 32 capas, más fotogramas por adelantado, varias capas a la vez en varios núcleos |
 
-## 13. Problemas frecuentes
+## 14. Problemas frecuentes
 
 | Problema | Solución |
 |---|---|

@@ -24,7 +24,8 @@ QString timecodeOf(const Rational& t, const Rational& rate) {
 
 } // namespace
 
-SpeedDialog::SpeedDialog(Rational span, Rational frameRate, double speedPercent, bool reverse, QWidget* parent)
+SpeedDialog::SpeedDialog(Rational span, Rational frameRate, double speedPercent, bool reverse, QWidget* parent,
+                         bool maintainPitch)
     : QDialog(parent), m_span(span), m_frameRate(frameRate) {
     setWindowTitle(tr("Clip Speed / Duration"));
     auto* form = new QFormLayout;
@@ -39,6 +40,8 @@ SpeedDialog::SpeedDialog(Rational span, Rational frameRate, double speedPercent,
     m_reverse = new QCheckBox(tr("Reverse Speed"));
     m_reverse->setChecked(reverse);
     m_ripple = new QCheckBox(tr("Ripple Edit, Shifting Trailing Clips"));
+    m_pitch = new QCheckBox(tr("Maintain Audio Pitch"));
+    m_pitch->setChecked(maintainPitch);
     m_error = new QLabel;
     m_error->setStyleSheet(QStringLiteral("color: #e06060"));
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -48,6 +51,7 @@ SpeedDialog::SpeedDialog(Rational span, Rational frameRate, double speedPercent,
     layout->addLayout(form);
     layout->addWidget(m_reverse);
     layout->addWidget(m_ripple);
+    layout->addWidget(m_pitch);
     layout->addWidget(m_error);
     layout->addWidget(buttons);
     connect(m_speed, &QDoubleSpinBox::valueChanged, this, [this] { speedEdited(); });
@@ -65,6 +69,10 @@ bool SpeedDialog::reverse() const {
 
 bool SpeedDialog::ripple() const {
     return m_ripple->isChecked();
+}
+
+bool SpeedDialog::maintainPitch() const {
+    return m_pitch->isChecked();
 }
 
 Rational SpeedDialog::speed() const {

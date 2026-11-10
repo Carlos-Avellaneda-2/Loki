@@ -45,6 +45,9 @@ std::string clipShapeProblem(const Clip& clip) {
     if (clip.speed.isNegative() || clip.speed > Rational(kMaxClipSpeed)) {
         return "clip " + clip.id.toString() + " has an invalid speed";
     }
+    if (clip.angle < 0 || clip.angle > 98) {
+        return "clip " + clip.id.toString() + " has an invalid multicam angle";
+    }
     std::unordered_set<EffectId> effectIds;
     for (const auto& effect : clip.effects) {
         if (effect.id.isNull() || !effectIds.insert(effect.id).second) {
@@ -92,6 +95,9 @@ std::string trackProblem(const Track& track) {
     if (!std::isfinite(track.state.volumeDb) || !(track.state.pan >= -100.0 && track.state.pan <= 100.0)) {
         return "track " + track.id.toString() + " has an invalid volume or pan";
     }
+    if (!keyframesValid(track.state.volumeAutomation) || !keyframesValid(track.state.panAutomation)) {
+        return "track " + track.id.toString() + " has invalid automation";
+    }
     for (std::size_t i = 0; i < track.clips.size(); ++i) {
         if (auto problem = clipShapeProblem(track.clips[i]); !problem.empty()) {
             return problem;
@@ -125,6 +131,26 @@ std::string markersProblem(const std::vector<Marker>& markers) {
         if (i > 0 && m.time < markers[i - 1].time) {
             return "markers are not sorted by time";
         }
+    }
+    return {};
+}
+
+std::string captionsProblem(const std::vector<Caption>& captions, const CaptionStyle& style) {
+    std::unordered_set<CaptionId> ids;
+    for (std::size_t i = 0; i < captions.size(); ++i) {
+        const auto& c = captions[i];
+        if (c.id.isNull() || !ids.insert(c.id).second) {
+            return "null or duplicate caption id";
+        }
+        if (c.start.isNegative() || !c.duration.isPositive()) {
+            return "caption " + c.id.toString() + " has an invalid time";
+        }
+        if (i > 0 && captions[i - 1].end() > c.start) {
+            return "captions overlap or are not sorted";
+        }
+    }
+    if (!(style.size > 0.0) || !std::isfinite(style.positionY) || !std::isfinite(style.backgroundOpacity)) {
+        return "invalid caption style";
     }
     return {};
 }
@@ -335,6 +361,9 @@ std::vector<std::string> Project::validate() const {
             problems.push_back(p);
         }
         if (auto p = markersProblem(seq.markers); !p.empty()) {
+            problems.push_back(p);
+        }
+        if (auto p = captionsProblem(seq.captions, seq.captionStyle); !p.empty()) {
             problems.push_back(p);
         }
         for (const auto nested : nestedSequencesOf(seq)) {
@@ -592,6 +621,16 @@ void ProjectMutator::setSequenceMarks(SequenceId id, std::optional<Rational> in,
     m_project.notify({ChangeKind::SequenceChanged, id.uuid(), {}});
 }
 
+void ProjectMutator::setSequenceCaptions(SequenceId id, std::vector<Caption> captions, CaptionStyle style) {
+    if (auto p = captionsProblem(captions, style); !p.empty()) {
+        fail(p);
+    }
+    auto& seq = sequence(id);
+    seq.captions = std::move(captions);
+    seq.captionStyle = std::move(style);
+    m_project.notify({ChangeKind::SequenceChanged, id.uuid(), {}});
+}
+
 void ProjectMutator::setSequenceMarkers(SequenceId id, std::vector<Marker> markers) {
     if (auto p = markersProblem(markers); !p.empty()) {
         fail(p);
@@ -726,6 +765,9 @@ void ProjectMutator::replaceTransition(Transition transition) {
 void ProjectMutator::setTrackState(TrackId id, TrackState state) {
     if (!std::isfinite(state.volumeDb) || !std::isfinite(state.pan) || state.pan < -100.0 || state.pan > 100.0) {
         fail("track volume must be finite and pan within [-100, 100]");
+    }
+    if (!keyframesValid(state.volumeAutomation) || !keyframesValid(state.panAutomation)) {
+        fail("track automation keyframes are invalid");
     }
     std::size_t index = 0;
     auto [seq, list] = trackList(id, index);

@@ -275,6 +275,7 @@ void TimelineView::paintEvent(QPaintEvent*) {
         if (const auto* track = trackOf(row)) {
             paintTrackClips(p, row, *track);
             paintTransitions(p, row, *track);
+            paintAutomation(p, row, *track);
         }
         p.setPen(QColor(0x18, 0x18, 0x18));
         p.drawLine(kHeaderWidth, row.top + row.height - 1, width(), row.top + row.height - 1);
@@ -359,6 +360,23 @@ void TimelineView::paintRuler(QPainter& p, const QRect& area) const {
         p.drawText(QPointF(x + 3, area.top() + 12),
                    qs(formatTimecode(timeToFrames(t, rate, Rounding::Floor), rate, supportsDropFrame(rate))));
     }
+    // Render bar (D42): green = rendered preview, red = needs rendering.
+    if (m_previewSegment.isPositive()) {
+        for (std::size_t i = 0; i < m_previewStates.size(); ++i) {
+            if (m_previewStates[i] == playback::PreviewState::Empty) {
+                continue;
+            }
+            const Rational from = m_previewSegment * Rational(static_cast<std::int64_t>(i));
+            const double x0 = area.left() + timeToX(from, m_metrics);
+            const double x1 = area.left() + timeToX(from + m_previewSegment, m_metrics);
+            if (x1 < area.left() || x0 > area.right()) {
+                continue;
+            }
+            const QColor color = m_previewStates[i] == playback::PreviewState::Rendered ? QColor(0x3c, 0xc0, 0x50)
+                                                                                         : QColor(0xc8, 0x3c, 0x3c);
+            p.fillRect(QRectF(x0, area.bottom() - 2.0, std::max(1.0, x1 - x0), 2.0), color);
+        }
+    }
     // Sequence markers (D29): a small tab at the bottom of the ruler, a bar for durations.
     if (const auto* seq = sequence()) {
         p.save();
@@ -382,6 +400,103 @@ void TimelineView::paintRuler(QPainter& p, const QRect& area) const {
         }
         p.restore();
     }
+}
+
+// --- Track automation (D39) ----------------------------------------------------------------------
+
+void TimelineView::showTrackAutomation(model::TrackId track, std::optional<commands::AutomationKind> kind) {
+    if (kind) {
+        m_automation[track] = *kind;
+    } else {
+        m_automation.erase(track);
+    }
+    update();
+}
+
+std::optional<commands::AutomationKind> TimelineView::trackAutomation(model::TrackId track) const {
+    const auto it = m_automation.find(track);
+    return it == m_automation.end() ? std::nullopt : std::optional(it->second);
+}
+
+QRectF TimelineView::automationArea(const TrackRow& row) const {
+    return {static_cast<double>(kHeaderWidth), row.top + 4.0, static_cast<double>(width() - kHeaderWidth), row.height - 9.0};
+}
+
+double TimelineView::automationY(const QRectF& area, commands::AutomationKind kind, double value) const {
+    if (kind == commands::AutomationKind::Volume) {
+        return levelY(area, value);
+    }
+    return area.center().y() - std::clamp(value, -100.0, 100.0) / 100.0 * area.height() / 2.0;
+}
+
+double TimelineView::automationValue(const QRectF& area, commands::AutomationKind kind, double y) const {
+    if (kind == commands::AutomationKind::Volume) {
+        return std::round(scaleToDb(std::clamp((area.bottom() - y) / area.height(), 0.0, 1.0), kLevelMaxDb) * 10.0) / 10.0;
+    }
+    return std::round(std::clamp((area.center().y() - y) / (area.height() / 2.0) * 100.0, -100.0, 100.0));
+}
+
+void TimelineView::paintAutomation(QPainter& p, const TrackRow& row, const model::Track& track) const {
+    const auto kind = trackAutomation(track.id);
+    if (!kind || track.kind != model::TrackKind::Audio) {
+        return;
+    }
+    const QRectF area = automationArea(row);
+    const auto valueAt = [&](const Rational& t) {
+        return *kind == commands::AutomationKind::Volume ? track.state.volumeAt(t) : track.state.panAt(t);
+    };
+    QPolygonF line;
+    for (int x = kHeaderWidth; x <= width(); x += 3) {
+        line << QPointF(x, automationY(area, *kind, valueAt(max(Rational(), timeAt(x)))));
+    }
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(0xff, 0x9a, 0x3c), 1.4));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolyline(line);
+    p.setBrush(QColor(0xff, 0x9a, 0x3c));
+    const auto& keys = *kind == commands::AutomationKind::Volume ? track.state.volumeAutomation : track.state.panAutomation;
+    for (const auto& k : keys) {
+        const double x = kHeaderWidth + timeToX(k.time, m_metrics);
+        const double y = automationY(area, *kind, k.value);
+        const QPointF diamond[] = {{x, y - 4}, {x + 4, y}, {x, y + 4}, {x - 4, y}};
+        p.drawPolygon(diamond, 4);
+    }
+    p.restore();
+}
+
+bool TimelineView::automationPress(const TrackRow& row, const QPoint& pos, bool ctrl) {
+    const auto* track = trackOf(row);
+    const auto kind = track != nullptr ? trackAutomation(track->id) : std::nullopt;
+    if (!kind || track->kind != model::TrackKind::Audio) {
+        return false;
+    }
+    const QRectF area = automationArea(row);
+    const auto& keys = *kind == commands::AutomationKind::Volume ? track->state.volumeAutomation : track->state.panAutomation;
+    for (const auto& k : keys) {
+        const double x = kHeaderWidth + timeToX(k.time, m_metrics);
+        if (std::abs(pos.x() - x) <= 5.0 && std::abs(pos.y() - automationY(area, *kind, k.value)) <= 6.0) {
+            m_drag = Drag::Automation;
+            m_dragStart = pos;
+            m_autoTrack = track->id;
+            m_autoKey = k.time;
+            m_dragGesture = m_controller.newGestureId();
+            return true;
+        }
+    }
+    if (ctrl) {
+        const Rational at = max(Rational(), quantizeToFrame(snapped(timeAt(pos.x())), frameRate(), Rounding::Nearest));
+        const auto id = track->id;
+        runEdit([&] { return commands::toggleTrackAutomationKey(m_controller.project(), id, *kind, at); });
+        return true;
+    }
+    return false;
+}
+
+void TimelineView::setPreviewStates(std::vector<playback::PreviewState> states, Rational segmentLength) {
+    m_previewStates = std::move(states);
+    m_previewSegment = segmentLength;
+    update(0, 0, width(), m_metrics.rulerHeight);
 }
 
 model::MarkerId TimelineView::markerAt(const QPoint& pos) const {
@@ -942,6 +1057,9 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
         headerClick(*row, pos);
         return;
     }
+    if (automationPress(*row, pos, event->modifiers().testFlag(Qt::ControlModifier))) {
+        return;
+    }
     if (m_tool == Tool::Selection) {
         for (const auto& [r, id] : m_transitionRects) {
             if (r.contains(pos)) {
@@ -1129,6 +1247,23 @@ void TimelineView::mouseMoveEvent(QMouseEvent* event) {
         emit statusMessage(db <= audio::kSilenceDb ? tr("Volume: -inf dB") : tr("Volume: %1 dB").arg(db, 0, 'f', 1));
         return;
     }
+    case Drag::Automation: {
+        const auto kind = trackAutomation(m_autoTrack);
+        const auto* row = rowAt(rows(), m_dragStart.y());
+        if (!kind || row == nullptr) {
+            return;
+        }
+        const double value = automationValue(automationArea(*row), *kind, pos.y());
+        const auto track = m_autoTrack;
+        const auto key = m_autoKey;
+        const auto gesture = m_dragGesture;
+        runEdit([&] {
+            return commands::setTrackAutomationValue(m_controller.project(), track, *kind, key, value, gesture);
+        });
+        emit statusMessage(*kind == commands::AutomationKind::Volume ? tr("Track volume: %1 dB").arg(value, 0, 'f', 1)
+                                                                     : tr("Track pan: %1").arg(value, 0, 'f', 0));
+        return;
+    }
     case Drag::FadeIn:
     case Drag::FadeOut: {
         const auto ref = m_controller.project().findClip(m_dragClip);
@@ -1225,6 +1360,17 @@ void TimelineView::mouseReleaseEvent(QMouseEvent* event) {
         // Dragging right moves the content right: earlier source frames come into view.
         const auto dt = -m_dragDelta;
         runEdit([&] { return commands::makeSlipEdit(project, m_sequence, m_dragClip, dt, m_dragLinked); });
+    } else if (drag == Drag::Automation) {
+        // Horizontal moves of a track keyframe are applied on release (same undo step as the value).
+        const auto kind = trackAutomation(m_autoTrack);
+        const QPoint pos = event->position().toPoint();
+        if (kind && std::abs(pos.x() - m_dragStart.x()) > 3) {
+            const auto to = max(Rational(), snapped(timeAt(pos.x())));
+            const auto track = m_autoTrack;
+            const auto from = m_autoKey;
+            const auto gesture = m_dragGesture;
+            runEdit([&] { return commands::moveTrackAutomationKey(project, track, *kind, from, to, gesture); });
+        }
     } else if (drag == Drag::Slide && !m_dragDelta.isZero()) {
         const auto dt = m_dragDelta;
         runEdit([&] { return commands::makeSlideEdit(project, m_sequence, m_dragClip, dt, m_dragLinked); });
@@ -1465,7 +1611,8 @@ void TimelineView::speedDuration() {
     }
     // The source span at 100 %: a frame hold starts from its duration.
     const Rational span = clip->speed.isZero() ? clip->duration : clip->sourceSpan();
-    SpeedDialog dialog(span, seq->settings.frameRate, clip->speed.toDouble() * 100.0, clip->reverse, this);
+    SpeedDialog dialog(span, seq->settings.frameRate, clip->speed.toDouble() * 100.0, clip->reverse, this,
+                       clip->maintainPitch);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -1473,7 +1620,10 @@ void TimelineView::speedDuration() {
     const auto speed = dialog.speed();
     const bool reverse = dialog.reverse();
     const bool ripple = dialog.ripple();
-    runEdit([&] { return commands::makeSetClipSpeed(m_controller.project(), m_sequence, ids, speed, reverse, ripple); });
+    const bool pitch = dialog.maintainPitch();
+    runEdit([&] {
+        return commands::makeSetClipSpeed(m_controller.project(), m_sequence, ids, speed, reverse, ripple, pitch);
+    });
 }
 
 std::optional<commands::PlacedClip> TimelineView::clipForFrameHold() const {
@@ -1614,6 +1764,19 @@ void TimelineView::contextMenuEvent(QContextMenuEvent* event) {
         menu.addAction(tr("Add Audio Track"), this, [this] {
             runEdit([&] { return std::make_unique<commands::AddTrackCommand>(m_sequence, model::TrackKind::Audio); });
         });
+        if (row != nullptr && row->kind == model::TrackKind::Audio) {
+            const auto trackId = row->id;
+            menu.addSeparator();
+            auto* show = menu.addMenu(tr("Show Track Keyframes"));
+            show->addAction(tr("Volume"), this, [this, trackId] { showTrackAutomation(trackId, commands::AutomationKind::Volume); });
+            show->addAction(tr("Pan"), this, [this, trackId] { showTrackAutomation(trackId, commands::AutomationKind::Pan); });
+            show->addAction(tr("None"), this, [this, trackId] { showTrackAutomation(trackId, std::nullopt); });
+            if (const auto kind = trackAutomation(trackId)) {
+                menu.addAction(tr("Clear Track Keyframes"), this, [this, trackId, kind] {
+                    runEdit([&] { return commands::clearTrackAutomation(m_controller.project(), trackId, *kind); });
+                });
+            }
+        }
         if (row != nullptr) {
             const auto trackId = row->id;
             menu.addSeparator();

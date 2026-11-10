@@ -1052,7 +1052,7 @@ std::unique_ptr<Command> makeNewGeneratedClip(const Project& project, SequenceId
 // --- Speed ----------------------------------------------------------------------------------------
 
 std::unique_ptr<Command> makeSetClipSpeed(const Project& project, SequenceId sequence, const std::vector<ClipId>& clips,
-                                          const Rational& speed, bool reverse, bool ripple) {
+                                          const Rational& speed, bool reverse, bool ripple, bool maintainPitch) {
     if (!speed.isPositive() || speed > Rational(kMaxClipSpeed)) {
         throw CommandError("Speed must be between 0 and 10000 %");
     }
@@ -1096,6 +1096,7 @@ std::unique_ptr<Command> makeSetClipSpeed(const Project& project, SequenceId seq
         }
         c.speed = speed;
         c.reverse = reverse;
+        c.maintainPitch = maintainPitch;
         c.duration = duration;
         changes.push_back({placed->track, std::move(c), oldEnd});
     }
@@ -1218,6 +1219,104 @@ std::unique_ptr<Command> makeAddFrameHold(const Project& project, SequenceId seq
 }
 
 // --- Nest -----------------------------------------------------------------------------------------
+
+std::unique_ptr<Command> makeMulticamSource(const Project& project, const std::vector<MediaId>& angles, std::string name,
+                                            const SequenceSettings& settings, MediaId* multicamMedia,
+                                            SequenceId* sourceSequence) {
+    std::vector<const MediaItem*> items;
+    for (const auto id : angles) {
+        const auto* m = project.findMedia(id);
+        if (m == nullptr || m->isGenerated() || !m->info.hasVideo) {
+            throw CommandError("Multi-camera angles must be video files");
+        }
+        items.push_back(m);
+    }
+    if (items.size() < 2 || items.size() > 9) {
+        throw CommandError("Choose 2 to 9 video clips for a multi-camera source");
+    }
+    Sequence seq = makeDefaultSequence(name, settings, static_cast<int>(items.size()), 1);
+    LinkId audioLink;
+    bool audioPlaced = false;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const auto& item = *items[i];
+        Clip video;
+        video.id = ClipId::generate();
+        video.media = item.id;
+        video.name = item.name;
+        video.duration = item.info.isStill ? Rational(5) : item.info.duration;
+        if (!video.duration.isPositive()) {
+            throw CommandError(item.name + " has no duration");
+        }
+        if (!audioPlaced && item.info.hasAudio) {
+            audioLink = LinkId::generate();
+            video.link = audioLink;
+            Clip audio = video;
+            audio.id = ClipId::generate();
+            seq.audioTracks[0].clips.push_back(std::move(audio));
+            audioPlaced = true;
+        }
+        seq.videoTracks[i].state.name = "Camera " + std::to_string(i + 1);
+        seq.videoTracks[i].clips.push_back(std::move(video));
+    }
+    MediaItem media = makeNestMedia(seq, std::move(name));
+    media.multicam = true;
+    media.info.hasAudio = audioPlaced;
+    if (multicamMedia != nullptr) {
+        *multicamMedia = media.id;
+    }
+    if (sourceSequence != nullptr) {
+        *sourceSequence = seq.id;
+    }
+    std::vector<std::unique_ptr<Command>> steps;
+    steps.push_back(std::make_unique<AddSequenceCommand>(std::move(seq)));
+    steps.push_back(std::make_unique<AddMediaCommand>(std::move(media)));
+    return std::make_unique<MacroCommand>("Create Multi-Camera Source", std::move(steps));
+}
+
+std::unique_ptr<Command> makeSwitchAngle(const Project& project, SequenceId sequence, ClipId clip, const Rational& at,
+                                         int angle) {
+    EditPlan plan(project, sequence);
+    auto placed = plan.find(clip);
+    if (!placed) {
+        throw CommandError("Clip is not part of this sequence");
+    }
+    const auto* media = project.findMedia(placed->clip.media);
+    const auto* source = media != nullptr && media->multicam ? project.findSequence(media->sequence) : nullptr;
+    const auto ref = project.findTrack(placed->track);
+    if (source == nullptr || ref.track == nullptr || ref.track->kind != TrackKind::Video) {
+        throw CommandError("Angles switch on multi-camera video clips");
+    }
+    if (angle < 0 || angle >= static_cast<int>(source->videoTracks.size())) {
+        throw CommandError("That camera does not exist");
+    }
+    if (plan.isLocked(placed->track)) {
+        throw CommandError("Track is locked");
+    }
+    const Clip c = placed->clip;
+    if (at < c.start || !(at < c.end())) {
+        throw CommandError("The playhead must be over the clip");
+    }
+    if (c.angle == angle) {
+        return nullptr;
+    }
+    plan.take(clip);
+    if (c.start < at) {
+        Clip left = c;
+        left.moveOut(at - c.end());
+        Clip right = c;
+        right.id = ClipId::generate();
+        right.moveIn(at - c.start);
+        right.angle = angle;
+        right.link = LinkId();
+        plan.add(placed->track, std::move(left));
+        plan.add(placed->track, std::move(right));
+    } else {
+        Clip whole = c;
+        whole.angle = angle;
+        plan.add(placed->track, std::move(whole));
+    }
+    return plan.build("Switch Camera " + std::to_string(angle + 1));
+}
 
 MediaItem makeNestMedia(const Sequence& sequence, std::string name) {
     MediaItem media;

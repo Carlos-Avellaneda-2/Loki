@@ -23,6 +23,7 @@ struct VideoSettings {
     // Encoder name to use ("h264_qsv", "libopenh264", ...); empty = best available (see encoders.h).
     std::string encoder;
     int gop = 0; // keyframe interval in frames; 0 = one per second
+    int proresProfile = 3; // prores_ks profile: 1 = LT (render previews), 3 = HQ
 };
 
 struct AudioSettings {

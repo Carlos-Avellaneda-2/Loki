@@ -35,6 +35,9 @@ public:
     [[nodiscard]] ProjectItemModel* itemModel() const noexcept { return m_model; }
     [[nodiscard]] QAction* importAction() const noexcept { return m_importAction; }
 
+    // Media items selected in the panel, in view order.
+    [[nodiscard]] std::vector<model::MediaId> selectedMedia() const;
+
     void setIconView(bool icons);
     [[nodiscard]] bool isIconView() const;
 

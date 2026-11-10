@@ -3,6 +3,7 @@
 #include "media/media_probe.h"
 #include "media/video_decoder.h"
 #include "model/project.h"
+#include "playback/render_previews.h"
 
 #include "media_assets.h"
 #include "media_generator.h"
@@ -155,6 +156,32 @@ TEST_F(ExportTest, CancelAndFailureRemoveThePartialFile) {
     auto empty = request("h264-match", "empty.mp4");
     empty.out = Rational(0);
     EXPECT_EQ(ExportJob(empty, cpu()).run().status, ExportStatus::Failed);
+}
+
+TEST_F(ExportTest, RenderPreviewIsUsedByPlaybackUntilTheSegmentChanges) {
+    auto r = request("h264-match", "unused.mp4");
+    auto snapshot = std::const_pointer_cast<playback::SequenceSnapshot>(r.snapshot);
+    const auto key = playback::previewSegmentKey(*snapshot, 0);
+    ASSERT_FALSE(key.empty());
+    const auto cache = dir.path() / "render";
+    std::filesystem::create_directories(cache);
+    r.preset = renderPreviewPreset();
+    r.file = playback::previewFile(cache, key);
+    ExportJob job(r, cpu());
+    ASSERT_EQ(job.run().status, ExportStatus::Finished);
+    playback::attachPreviews(*snapshot, cache);
+    ASSERT_EQ(snapshot->previews.files.size(), 1u);
+    EXPECT_FALSE(snapshot->previews.files[0].empty());
+    playback::SequenceVideoSource src(snapshot, false, 0, 0);
+    const auto f = src.frameAt(Rational(10, 25));
+    ASSERT_TRUE(f.has_value() && f->composite);
+    ASSERT_EQ(f->composite->layers.size(), 1u);
+    EXPECT_NEAR(centerLuma(f->frame), loki::test::expectedLuma(15), 8); // source frame 5 + 10
+    EXPECT_EQ(playback::previewStates(*snapshot, cache)[0], playback::PreviewState::Rendered);
+    // An edit in the segment changes its key: the old render is no longer used.
+    snapshot->sequence.videoTracks[0].clips[0].enabled = false;
+    playback::attachPreviews(*snapshot, cache);
+    EXPECT_TRUE(snapshot->previews.files.empty() || snapshot->previews.files[0].empty());
 }
 
 } // namespace

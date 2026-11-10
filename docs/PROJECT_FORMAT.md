@@ -1,4 +1,4 @@
-# Formato de proyecto `.loki` (versión 4)
+# Formato de proyecto `.loki` (versión 5)
 
 Archivo JSON en UTF-8. Lo escribe `model::saveProjectFile` y lo lee `model::loadProjectFile`
 (`src/model/project_json.*`).
@@ -86,6 +86,7 @@ Si algo falla se lanza `ProjectFormatError` con la ruta JSON del problema, por e
 - `tests/data/project_v2.loki` es el golden de la versión 2.
 - `tests/data/project_v3.loki` es el golden de la versión 3.
 - `tests/data/project_v4.loki` es el golden de la versión 4.
+- `tests/data/project_v5.loki` es el golden de la versión 5.
 
 ## Versión 2 (Fase 9, D19–D20)
 
@@ -145,4 +146,20 @@ La migración de v3 a v4 no cambia nada: todo lo nuevo es opcional y va dentro d
   `loki.sharpen`, `loki.stabilizer`.
 - Transiciones nuevas: `loki.dipToWhite`, `loki.additiveDissolve`, `loki.push`, `loki.slide`, `loki.irisRound`,
   `loki.irisBox`, `loki.crossZoom`.
+
+## Versión 5 (Fase 15, D38–D43)
+
+La migración de v4 a v5 no cambia nada: todo lo nuevo es opcional.
+
+- Clip: `"maintainPitch": true` (audio con velocidad sin cambio de tono) y `"angle": n` (cámara de un clip
+  multicámara, 0 = V1 de la fuente).
+- Pista de audio: `"volumeAutomation"` y `"panAutomation"`, con el formato de un parámetro de efecto; los keyframes
+  están en tiempo de la secuencia y reemplazan al fader / paneo estático.
+- Secuencia:
+  - `"captions": [{ "id", "start", "duration", "text" }]`, ordenados y sin solaparse.
+  - `"captionStyle": { "font", "size", "color", "backgroundOpacity", "positionY", "visible" }` (se omite con los
+    valores por defecto).
+- Medio `loki.nest` con `"multicam": true`: fuente multicámara (cada pista de video de la secuencia es una cámara).
+- Efectos de audio nuevos: `loki.eq`, `loki.compressor`, `loki.noiseReduction`.
+- Los renders de previsualización no van en el proyecto: viven en la caché con el nombre del hash de su tramo.
 

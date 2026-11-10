@@ -6,6 +6,7 @@
 #include <QDialog>
 
 #include <memory>
+#include <optional>
 #include <thread>
 
 class QComboBox;
@@ -17,6 +18,7 @@ class QPushButton;
 class QTimer;
 
 namespace loki::ui {
+class ExportQueue;
 class ProjectController;
 } // namespace loki::ui
 
@@ -47,6 +49,11 @@ public:
     [[nodiscard]] const exporter::ExportResult& lastResult() const noexcept { return m_result; }
     // Waits for a running export (tests).
     void waitForFinished();
+    // Export queue (D41): "Queue" adds the export there and closes the dialog.
+    void setQueue(ui::ExportQueue* queue);
+    bool addToQueue();
+    // Captions (D40): 0 = none, 1 = burned into the picture, 2 = a .srt file next to the output.
+    void setCaptionsMode(int mode);
 
 signals:
     void exportFinished(bool ok, const QString& message);
@@ -62,6 +69,11 @@ private:
     QComboBox* m_preset = nullptr;
     QLineEdit* m_file = nullptr;
     QComboBox* m_range = nullptr;
+    QComboBox* m_captions = nullptr;
+    QPushButton* m_queueButton = nullptr;
+    ui::ExportQueue* m_queue = nullptr;
+    // Request from the current settings (nullopt with a message when invalid).
+    std::optional<exporter::ExportRequest> buildRequest();
     QLabel* m_summary = nullptr;
     QProgressBar* m_progress = nullptr;
     QPushButton* m_export = nullptr;

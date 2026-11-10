@@ -67,7 +67,7 @@ void configureVideo(AVCodecContext* c, const AVCodec* codec, const VideoSettings
     c->color_primaries = AVCOL_PRI_BT709;
     c->color_trc = AVCOL_TRC_BT709;
     if (s.codec == VideoCodec::ProRes) {
-        av_opt_set_int(c->priv_data, "profile", 3, 0); // HQ
+        av_opt_set_int(c->priv_data, "profile", s.proresProfile, 0);
     } else {
         c->bit_rate = s.bitRate;
         c->rc_max_rate = s.bitRate * 3 / 2;

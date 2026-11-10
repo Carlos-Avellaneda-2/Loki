@@ -34,6 +34,17 @@ const std::vector<ExportPreset>& exportPresets() {
     return kPresets;
 }
 
+ExportPreset renderPreviewPreset() {
+    ExportPreset p;
+    p.id = "render-preview";
+    p.name = "Render Preview (ProRes LT)";
+    p.extension = ".mov";
+    p.video = VideoCodec::ProRes;
+    p.audio = AudioCodec::None;
+    p.proresProfile = 1;
+    return p;
+}
+
 const ExportPreset* findExportPreset(const std::string& id) {
     for (const auto& p : exportPresets()) {
         if (p.id == id) {
@@ -181,6 +192,7 @@ ExportResult ExportJob::run() {
         video.height = height;
         video.frameRate = rate;
         video.encoder = m_request.encoder;
+        video.proresProfile = m_request.preset.proresProfile;
         // Default bit rate: about 0.12 bits per pixel per frame (16 Mb/s at 1080p30).
         video.bitRate = m_request.preset.videoBitRate > 0
                             ? m_request.preset.videoBitRate
@@ -194,7 +206,12 @@ ExportResult ExportJob::run() {
         result.videoEncoder = writer->videoEncoderName();
 
         // Full-quality decoding (no preview downscale); hardware decoding is allowed.
-        playback::SequenceVideoSource videoSource(m_request.snapshot, true, 0, 0);
+        // Export renders fresh pictures (no render previews) with or without the captions.
+        auto snapshot = std::make_shared<playback::SequenceSnapshot>(*m_request.snapshot);
+        snapshot->showCaptions = m_request.burnCaptions;
+        snapshot->multicamView = false;
+        snapshot->previews = {};
+        playback::SequenceVideoSource videoSource(snapshot, true, 0, 0);
         playback::SequenceAudioSource audioSource(m_request.snapshot, kSampleRate, kChannels);
         audioSource.seek(m_request.in);
         const auto totalAudio = timeToFrames(m_request.out - m_request.in, Rational(kSampleRate), Rounding::Nearest);

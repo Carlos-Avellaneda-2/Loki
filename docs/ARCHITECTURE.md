@@ -445,6 +445,23 @@ sequenceDiagram
 - `ui::MaskOverlay` dibuja y edita la máscara elegida sobre el monitor de programa (`VideoView::setOverlay`), y
   crea máscaras con la pluma.
 
+## 7k. Audio, subtítulos, entrega y multicámara (Fase 15)
+
+- `audio/effects` (puro): `ParametricEq` (biquads RBJ), `Compressor` (pico enlazado, envolvente en dB),
+  `NoiseReducer` (STFT 1024/256 con FFT propia, estimación de ruido por mínimo de la potencia suavizada, latencia
+  1024) y `TimeStretcher` (WSOLA 1024/512). `SequenceAudioSource` les da estado por lector de clip, los reinicia en
+  cada salto y precarga la latencia del reductor de ruido para que el audio siga en sincronía.
+- Automatización (D39): `TrackState::volumeAutomation/panAutomation` en tiempo de secuencia; el mezclador evalúa la
+  ganancia cada 64 muestras. Ediciones de mezcla (automatización, efectos de audio) no recargan el motor.
+- Subtítulos (D40): `Sequence::captions` + `captionStyle`; `SequenceVideoSource` agrega una capa de texto
+  (`text::renderTitle` con caja de fondo) cuando `SequenceSnapshot::showCaptions`. Export: quemados o `.srt`.
+- Cola (D41): `ui::ExportQueue` corre `ExportJob`s uno tras otro en un hilo; también ejecuta los renders.
+- Render de previsualización (D42): `playback/render_previews` corta la secuencia en tramos de 2 s; la clave de
+  un tramo es un hash FNV-1a del JSON canónico de lo que lo dibuja. Los archivos (ProRes LT) se llaman como la
+  clave, así que una edición invalida sola. `SequenceVideoSource` usa el render si existe.
+- Multicámara (D43): medio `loki.nest` con `multicam`; `Clip::angle` elige la pista de la fuente
+  (`SequenceVideoSource::setSoloTrack`). Con `SequenceSnapshot::multicamView` el monitor muestra la grilla.
+
 ## 8. Export
 
 Implementado en la Fase 10 (D22, D23), en el módulo `export` (namespace `loki::exporter`).

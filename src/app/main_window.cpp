@@ -19,6 +19,10 @@
 #include "commands/project_commands.h"
 #include "ui/markers_panel.h"
 #include "ui/mask_overlay.h"
+#include "ui/captions_panel.h"
+#include "ui/export_queue.h"
+#include "playback/render_previews.h"
+#include "export/export_job.h"
 #include "ui/scopes_panel.h"
 #include "ui/video_view.h"
 #include "ui/auto_saver.h"
@@ -50,6 +54,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPointer>
+#include <QTimer>
 #include <QSettings>
 #include <QStatusBar>
 
@@ -101,6 +106,7 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
     ads::CDockManager::setConfigFlag(ads::CDockManager::FocusHighlighting, true);
     ads::CDockManager::setConfigFlag(ads::CDockManager::AllTabsHaveCloseButton, false);
 
+    m_exportQueue = new ui::ExportQueue(this); // before the panels: the Export Queue panel shows it
     m_dockManager = new ads::CDockManager(this);
     // Drop ADS's built-in light stylesheet; the application dark theme styles dock widgets.
     m_dockManager->setStyleSheet(QString());
@@ -202,6 +208,24 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
         statusBar()->showMessage(tr("Pen: click points on the Program Monitor; click the first point to close the mask"), 8000);
     });
     m_markers->setEditor([this](model::MarkerId id) { m_timeline->view()->editMarker(id); });
+    // Captions (D40), render previews (D42), multicam (D43), export queue (D41).
+    m_captions->setPlayhead([this] { return m_programMonitor->engine().position(); });
+    connect(m_captions, &ui::CaptionsPanel::seekRequested, this, [this](Rational t) { m_programMonitor->engine().seek(t); });
+    m_programMonitor->setPreviewCacheDir(previewCacheDir());
+    connect(m_programMonitor, &ui::ProgramMonitorPanel::cameraRequested, this, &MainWindow::switchCamera);
+    connect(m_exportQueue, &ui::ExportQueue::entryFinished, this, [this](int, bool ok, const QString& message, bool preview) {
+        if (preview) {
+            m_programMonitor->publishSnapshot(); // pick up the new render files
+            updatePreviewStates();
+        } else {
+            statusBar()->showMessage(ok ? tr("Export finished: %1").arg(message) : tr("Export failed: %1").arg(message), 6000);
+        }
+    });
+    m_previewStateTimer = new QTimer(this);
+    m_previewStateTimer->setSingleShot(true);
+    m_previewStateTimer->setInterval(300);
+    connect(m_previewStateTimer, &QTimer::timeout, this, &MainWindow::updatePreviewStates);
+    connect(m_controller, &ui::ProjectController::projectChanged, this, [this] { m_previewStateTimer->start(); });
     // Scopes (D32): the Program picture, read back only while the Scopes panel is shown.
     m_programMonitor->videoView()->setFrameTap(
         [scopes = QPointer<ui::ScopesPanel>(m_scopes)] { return scopes && scopes->wantsImages(); },
@@ -232,6 +256,108 @@ void MainWindow::setActiveSequence(model::SequenceId id) {
     m_programMonitor->setSequence(m_activeSequence);
     m_audioMixer->setSequence(m_activeSequence);
     m_markers->setSequence(m_activeSequence);
+    m_captions->setSequence(m_activeSequence);
+    if (m_previewStateTimer != nullptr) {
+        m_previewStateTimer->start();
+    }
+}
+
+QString MainWindow::previewCacheDir() const {
+    return QDir(m_services->cacheDirectory()).filePath(QStringLiteral("render"));
+}
+
+void MainWindow::updatePreviewStates() {
+    const auto snapshot = playback::makeSnapshot(m_controller->project(), m_activeSequence, 0);
+    if (!snapshot) {
+        m_timeline->view()->setPreviewStates({}, Rational());
+        return;
+    }
+    m_timeline->view()->setPreviewStates(
+        playback::previewStates(*snapshot, std::filesystem::path(previewCacheDir().toStdWString())),
+        playback::previewSegmentLength());
+}
+
+int MainWindow::renderPreviews() {
+    const auto* seq = m_controller->project().findSequence(m_activeSequence);
+    auto snapshot = playback::makeSnapshot(m_controller->project(), m_activeSequence, 0);
+    if (seq == nullptr || !snapshot) {
+        return 0;
+    }
+    const Rational length = playback::previewSegmentLength();
+    const Rational in = seq->markIn.value_or(Rational());
+    const Rational out = min(seq->markOut.value_or(seq->duration()), seq->duration());
+    const std::filesystem::path dir(previewCacheDir().toStdWString());
+    int queued = 0;
+    const auto count = playback::previewSegmentCount(*snapshot);
+    for (std::size_t i = 0; i < count; ++i) {
+        const Rational start = length * Rational(static_cast<std::int64_t>(i));
+        const Rational end = min(start + length, seq->duration());
+        if (end <= in || start >= out) {
+            continue;
+        }
+        const auto key = playback::previewSegmentKey(*snapshot, i);
+        const auto file = playback::previewFile(dir, key);
+        std::error_code ec;
+        if (key.empty() || std::filesystem::exists(file, ec)) {
+            continue;
+        }
+        exporter::ExportRequest request;
+        request.snapshot = snapshot;
+        request.in = start;
+        request.out = end;
+        request.preset = exporter::renderPreviewPreset();
+        request.file = dir / (key + ".part.mov");
+        m_exportQueue->enqueue(tr("Render preview %1").arg(i + 1), std::move(request), file, true);
+        ++queued;
+    }
+    statusBar()->showMessage(queued > 0 ? tr("Rendering %n segment(s) in the background", nullptr, queued)
+                                        : tr("Nothing to render: the range is already rendered"),
+                             5000);
+    return queued;
+}
+
+void MainWindow::deleteRenderFiles() {
+    std::error_code ec;
+    std::filesystem::remove_all(std::filesystem::path(previewCacheDir().toStdWString()), ec);
+    m_programMonitor->publishSnapshot();
+    updatePreviewStates();
+}
+
+bool MainWindow::createMulticamSource(const std::vector<model::MediaId>& angles) {
+    const auto* seq = m_controller->project().findSequence(m_activeSequence);
+    const auto settings = seq != nullptr ? seq->settings : model::SequenceSettings{};
+    try {
+        model::MediaId media;
+        const auto name = tr("Multi-Camera %1").arg(m_controller->project().sequences().size()).toStdString();
+        return m_controller->execute(commands::makeMulticamSource(m_controller->project(), angles, name, settings, &media));
+    } catch (const std::exception& e) {
+        statusBar()->showMessage(QString::fromUtf8(e.what()), 6000);
+        return false;
+    }
+}
+
+void MainWindow::switchCamera(int angle) {
+    const auto* seq = m_controller->project().findSequence(m_activeSequence);
+    if (seq == nullptr) {
+        return;
+    }
+    const Rational at = quantizeToFrame(m_programMonitor->engine().position(), seq->settings.frameRate, Rounding::Floor);
+    for (auto track = seq->videoTracks.rbegin(); track != seq->videoTracks.rend(); ++track) {
+        for (const auto& c : track->clips) {
+            const auto* media = m_controller->project().findMedia(c.media);
+            if (media != nullptr && media->multicam && c.start <= at && at < c.end()) {
+                try {
+                    if (auto command = commands::makeSwitchAngle(m_controller->project(), m_activeSequence, c.id, at, angle)) {
+                        m_controller->execute(std::move(command));
+                    }
+                } catch (const std::exception& e) {
+                    statusBar()->showMessage(QString::fromUtf8(e.what()), 4000);
+                }
+                return;
+            }
+        }
+    }
+    statusBar()->showMessage(tr("No multi-camera clip under the playhead"), 4000);
 }
 
 bool MainWindow::createSequence(const std::string& name, const model::SequenceSettings& settings, int videoTracks,
@@ -367,6 +493,7 @@ void MainWindow::exportMedia() {
         return;
     }
     ExportDialog dialog(*m_controller, m_activeSequence, this);
+    dialog.setQueue(m_exportQueue);
     connect(&dialog, &ExportDialog::exportFinished, this,
             [this](bool, const QString& message) { statusBar()->showMessage(message, 8000); });
     dialog.exec();
@@ -501,6 +628,8 @@ void MainWindow::applyWorkspace(Workspace workspace) {
         m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Project), effectsArea);
         effectsArea->setCurrentDockWidget(dockWidget(PanelId::Effects));
         m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Markers), effectsArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Captions), effectsArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::ExportQueue), effectsArea);
         effectsArea->setCurrentDockWidget(dockWidget(PanelId::Effects));
         m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
         // Color: the scopes beside the Program Monitor.
@@ -522,6 +651,8 @@ void MainWindow::applyWorkspace(Workspace workspace) {
         auto* projectArea = m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Project), timelineArea);
         m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Effects), projectArea);
         m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Markers), projectArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Captions), projectArea);
+        m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::ExportQueue), projectArea);
         projectArea->setCurrentDockWidget(dockWidget(PanelId::Project));
         m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
         m_dockManager->setSplitterSizes(timelineArea, {250, 800, 250});
@@ -541,6 +672,8 @@ void MainWindow::applyWorkspace(Workspace workspace) {
     auto* projectArea = m_dockManager->addDockWidget(ads::LeftDockWidgetArea, dockWidget(PanelId::Project), timelineArea);
     m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Effects), projectArea);
     m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Markers), projectArea);
+    m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::Captions), projectArea);
+    m_dockManager->addDockWidgetTabToArea(dockWidget(PanelId::ExportQueue), projectArea);
     projectArea->setCurrentDockWidget(dockWidget(PanelId::Project));
     m_dockManager->addDockWidget(ads::RightDockWidgetArea, dockWidget(PanelId::AudioMeters), timelineArea);
 
@@ -591,6 +724,14 @@ QWidget* MainWindow::createPanelWidget(ui::PanelId id) {
     case ui::PanelId::Scopes: {
         m_scopes = new ui::ScopesPanel();
         return m_scopes;
+    }
+    case ui::PanelId::Captions: {
+        m_captions = new ui::CaptionsPanel(*m_controller);
+        return m_captions;
+    }
+    case ui::PanelId::ExportQueue: {
+        m_exportQueuePanel = new ui::ExportQueuePanel(*m_exportQueue);
+        return m_exportQueuePanel;
     }
     default: return ui::createPanel(id);
     }
@@ -678,6 +819,15 @@ void MainWindow::createMenus() {
         }
     });
     sequenceMenu->addSeparator();
+    auto* render = sequenceMenu->addAction(tr("&Render In to Out"));
+    m_shortcuts->bind(render, QStringLiteral("app.renderInOut"), QString::fromLatin1(ui::ShortcutManager::kApplicationContext),
+                      QKeySequence(Qt::CTRL | Qt::Key_Return)); // plain Enter belongs to text fields
+    connect(render, &QAction::triggered, this, [this] { renderPreviews(); });
+    sequenceMenu->addAction(tr("Delete Render Files"), this, [this] { deleteRenderFiles(); });
+    auto* multicamView = sequenceMenu->addAction(tr("Multi-Camera View"));
+    multicamView->setCheckable(true);
+    connect(multicamView, &QAction::toggled, this, [this](bool on) { m_programMonitor->setMulticamView(on); });
+    sequenceMenu->addSeparator();
     sequenceMenu->addAction(tr("&Delete Sequence"), this, [this] { deleteSequence(m_activeSequence); });
 
     auto* clipMenu = menuBar()->addMenu(tr("&Clip"));
@@ -685,6 +835,14 @@ void MainWindow::createMenus() {
     clipMenu->addAction(tr("Add &Frame Hold"), this, [this] { m_timeline->view()->addFrameHold(); });
     clipMenu->addSeparator();
     clipMenu->addAction(tr("&Nest..."), this, [this] { m_timeline->view()->nestSelection(); });
+    clipMenu->addAction(tr("Create &Multi-Camera Source Sequence"), this, [this] {
+        const auto selected = m_projectPanel->selectedMedia();
+        if (selected.size() < 2) {
+            statusBar()->showMessage(tr("Select 2 to 9 video clips in the Project panel"), 5000);
+            return;
+        }
+        createMulticamSource(selected);
+    });
 
     auto* windowMenu = menuBar()->addMenu(tr("&Window"));
     m_workspaceMenu = windowMenu->addMenu(tr("&Workspaces"));

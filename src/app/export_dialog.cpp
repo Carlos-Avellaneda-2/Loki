@@ -1,5 +1,9 @@
 #include "app/export_dialog.h"
 
+#include "commands/caption_commands.h"
+#include "ui/export_queue.h"
+#include "util/atomic_file.h"
+
 #include "ui/project_controller.h"
 #include "util/timecode.h"
 
@@ -60,8 +64,19 @@ ExportDialog::ExportDialog(ui::ProjectController& controller, model::SequenceId 
     form->addRow(tr("Preset"), m_preset);
     form->addRow(tr("Output File"), fileRow);
     form->addRow(tr("Range"), m_range);
+    m_captions = new QComboBox(this);
+    m_captions->addItems({tr("None"), tr("Burn into the video"), tr("Sidecar .srt file")});
+    form->addRow(tr("Captions"), m_captions);
     auto* buttons = new QDialogButtonBox(this);
     m_export = buttons->addButton(tr("Export"), QDialogButtonBox::AcceptRole);
+    m_queueButton = buttons->addButton(tr("Queue"), QDialogButtonBox::ActionRole);
+    m_queueButton->setToolTip(tr("Add to the Export Queue and keep editing"));
+    m_queueButton->setVisible(false);
+    connect(m_queueButton, &QPushButton::clicked, this, [this] {
+        if (addToQueue()) {
+            accept();
+        }
+    });
     buttons->addButton(QDialogButtonBox::Cancel);
     auto* layout = new QVBoxLayout(this);
     layout->addLayout(form);
@@ -163,15 +178,21 @@ void ExportDialog::updateSummary() {
     m_export->setEnabled(!isRunning() && exporter::ExportJob::frameCount(request) > 0);
 }
 
-bool ExportDialog::startExport() {
-    if (isRunning()) {
-        return false;
-    }
+void ExportDialog::setQueue(ui::ExportQueue* queue) {
+    m_queue = queue;
+    m_queueButton->setVisible(queue != nullptr);
+}
+
+void ExportDialog::setCaptionsMode(int mode) {
+    m_captions->setCurrentIndex(std::clamp(mode, 0, 2));
+}
+
+std::optional<exporter::ExportRequest> ExportDialog::buildRequest() {
     const auto* seq = m_controller.project().findSequence(m_sequence);
     const QString file = m_file->text().trimmed();
     if (seq == nullptr || file.isEmpty()) {
         QMessageBox::warning(this, windowTitle(), tr("Choose an output file."));
-        return false;
+        return std::nullopt;
     }
     exporter::ExportRequest request;
     request.snapshot = playback::makeSnapshot(m_controller.project(), m_sequence, 0);
@@ -180,13 +201,58 @@ bool ExportDialog::startExport() {
     request.in = inOut ? seq->markIn.value_or(Rational()) : Rational();
     request.out = inOut ? seq->markOut.value_or(seq->duration()) : seq->duration();
     request.file = std::filesystem::path(file.toStdWString());
+    request.burnCaptions = m_captions->currentIndex() == 1;
     if (exporter::ExportJob::frameCount(request) <= 0) {
         QMessageBox::warning(this, windowTitle(), tr("The export range is empty."));
-        return false;
+        return std::nullopt;
+    }
+    if (m_captions->currentIndex() == 2) {
+        // Sidecar captions, timed from the start of the exported range.
+        std::vector<model::Caption> shifted;
+        for (auto c : seq->captions) {
+            if (c.end() <= request.in || c.start >= request.out) {
+                continue;
+            }
+            c.start = max(c.start, request.in) - request.in;
+            shifted.push_back(std::move(c));
+        }
+        try {
+            auto srt = request.file;
+            srt.replace_extension(".srt");
+            util::writeFileAtomic(srt, commands::formatSrt(shifted));
+        } catch (const std::exception& e) {
+            QMessageBox::warning(this, windowTitle(), tr("Could not write the captions file.\n\n%1").arg(e.what()));
+            return std::nullopt;
+        }
     }
     QSettings settings;
     settings.setValue(QStringLiteral("export/preset"), qs(request.preset.id));
     settings.setValue(QStringLiteral("export/folder"), QFileInfo(file).absolutePath());
+    return request;
+}
+
+bool ExportDialog::addToQueue() {
+    if (m_queue == nullptr || isRunning()) {
+        return false;
+    }
+    auto request = buildRequest();
+    if (!request) {
+        return false;
+    }
+    const auto name = QFileInfo(m_file->text()).fileName();
+    m_queue->enqueue(name, std::move(*request));
+    return true;
+}
+
+bool ExportDialog::startExport() {
+    if (isRunning()) {
+        return false;
+    }
+    auto built = buildRequest();
+    if (!built) {
+        return false;
+    }
+    auto request = std::move(*built);
 
     std::vector<std::unique_ptr<exporter::FrameRenderer>> renderers;
     if (!m_forceCpu) {

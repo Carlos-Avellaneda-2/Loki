@@ -212,6 +212,19 @@ void ProjectPanel::newBin() {
     }
 }
 
+std::vector<model::MediaId> ProjectPanel::selectedMedia() const {
+    std::vector<model::MediaId> out;
+    const auto* view = isIconView() ? static_cast<QAbstractItemView*>(m_icons) : m_tree;
+    auto rows = view->selectionModel()->selectedRows(0);
+    std::sort(rows.begin(), rows.end(), [](const QModelIndex& a, const QModelIndex& b) { return a.row() < b.row(); });
+    for (const auto& idx : rows) {
+        if (auto id = m_model->mediaId(idx)) {
+            out.push_back(id);
+        }
+    }
+    return out;
+}
+
 void ProjectPanel::deleteSelection() {
     const auto* view = isIconView() ? static_cast<QAbstractItemView*>(m_icons) : m_tree;
     std::vector<model::BinId> bins;

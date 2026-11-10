@@ -161,6 +161,7 @@ public:
     void setSequenceName(SequenceId id, std::string name);
     void setSequenceMasterVolume(SequenceId id, double db);
     void setSequenceMarkers(SequenceId id, std::vector<Marker> markers); // sorted by time
+    void setSequenceCaptions(SequenceId id, std::vector<Caption> captions, CaptionStyle style);
     void setSequenceSettings(SequenceId id, SequenceSettings settings);
     void setSequenceMarks(SequenceId id, std::optional<Rational> in, std::optional<Rational> out);
 

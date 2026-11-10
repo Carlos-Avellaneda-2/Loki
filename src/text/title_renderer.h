@@ -17,6 +17,7 @@ struct TitleSpec {
     bool shadow = true;
     double shadowDistance = 6;
     double shadowOpacity = 60; // percent
+    double backgroundOpacity = 0; // percent of a black box behind the text (captions, D40)
     int canvasWidth = 1920;
     int canvasHeight = 1080;
 

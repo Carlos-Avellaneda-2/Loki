@@ -71,6 +71,7 @@ struct MediaItem {
     std::optional<Rational> markIn;
     std::optional<Rational> markOut;
     SequenceId sequence;         // kNestGenerator: the nested sequence (D30)
+    bool multicam = false;       // kNestGenerator: a multi-camera source (D43), clips pick an angle
     std::vector<Marker> markers; // clip markers, source time, sorted by time (D29)
 
     [[nodiscard]] bool isGenerated() const noexcept { return !generator.empty(); }
@@ -145,6 +146,8 @@ struct Clip {
     // the frame at sourceIn (Frame Hold). `reverse` plays [sourceIn, sourceOut) backwards.
     Rational speed{1};
     bool reverse = false;
+    bool maintainPitch = false; // D38: retimed audio keeps its pitch (time stretch)
+    int angle = 0;              // D43: multicam clips show this video track (0 = V1) of the source
 
     [[nodiscard]] Rational end() const { return start + duration; }
     // Source time the clip covers: [sourceIn, sourceOut()).
@@ -240,6 +243,17 @@ struct TrackState {
     double volumeDb = 0.0;
     double pan = 0.0;
     bool solo = false;
+    // Track automation (D39): keyframes in *sequence* time; when present they replace the static
+    // fader (volumeDb) / pan.
+    std::vector<Keyframe> volumeAutomation;
+    std::vector<Keyframe> panAutomation;
+
+    [[nodiscard]] double volumeAt(const Rational& t) const {
+        return volumeAutomation.empty() ? volumeDb : Parameter{"", volumeDb, volumeAutomation}.valueAt(t);
+    }
+    [[nodiscard]] double panAt(const Rational& t) const {
+        return panAutomation.empty() ? pan : Parameter{"", pan, panAutomation}.valueAt(t);
+    }
 
     friend bool operator==(const TrackState&, const TrackState&) = default;
 };
@@ -273,6 +287,29 @@ struct Track {
     friend bool operator==(const Track&, const Track&) = default;
 };
 
+// A caption (D40), sequence time.
+struct Caption {
+    CaptionId id;
+    Rational start;
+    Rational duration; // > 0
+    std::string text;
+
+    [[nodiscard]] Rational end() const { return start + duration; }
+    friend bool operator==(const Caption&, const Caption&) = default;
+};
+
+// How the captions of a sequence look (one style per sequence).
+struct CaptionStyle {
+    std::string font = "Arial";
+    double size = 54.0;           // px at the sequence size
+    std::string color = "#ffffff";
+    double backgroundOpacity = 60.0; // % of a black box behind the text
+    double positionY = 88.0;      // % from the top of the frame (text baseline area)
+    bool visible = true;          // shown in the monitors (export decides burn-in separately)
+
+    friend bool operator==(const CaptionStyle&, const CaptionStyle&) = default;
+};
+
 struct SequenceSettings {
     int width = 1920;
     int height = 1080;
@@ -293,6 +330,8 @@ struct Sequence {
     std::optional<Rational> markOut;
     double masterVolumeDb = 0.0; // master fader (D16)
     std::vector<Marker> markers; // sequence markers, sorted by time (D29)
+    std::vector<Caption> captions; // sorted by start, not overlapping (D40)
+    CaptionStyle captionStyle;
 
     [[nodiscard]] const std::vector<Track>& tracks(TrackKind kind) const noexcept {
         return kind == TrackKind::Video ? videoTracks : audioTracks;

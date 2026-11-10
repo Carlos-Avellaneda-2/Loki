@@ -206,6 +206,43 @@ const std::vector<EffectDef>& effectRegistry() {
              {"Stabilize Only", "Stabilize, Crop, Auto-scale"}, false},
         };
         r.push_back(std::move(stabilizer));
+
+        EffectDef eq;
+        eq.type = std::string(kEqEffect);
+        eq.label = "Parametric Equalizer";
+        eq.kind = TrackKind::Audio;
+        eq.parameters = {
+            {"lowGain", "Low Gain", 0, DefaultKind::Constant, -24, 24, 0.5, 1, "dB", {}, true},
+            {"lowFreq", "Low Frequency", 100, DefaultKind::Constant, 20, 1000, 10, 0, "Hz", {}, false},
+            {"midGain", "Mid Gain", 0, DefaultKind::Constant, -24, 24, 0.5, 1, "dB", {}, true},
+            {"midFreq", "Mid Frequency", 1000, DefaultKind::Constant, 100, 10000, 10, 0, "Hz", {}, false},
+            {"midQ", "Mid Q", 1, DefaultKind::Constant, 0.1, 10, 0.1, 2, "", {}, false},
+            {"highGain", "High Gain", 0, DefaultKind::Constant, -24, 24, 0.5, 1, "dB", {}, true},
+            {"highFreq", "High Frequency", 8000, DefaultKind::Constant, 1000, 20000, 100, 0, "Hz", {}, false},
+        };
+        r.push_back(std::move(eq));
+
+        EffectDef compressor;
+        compressor.type = std::string(kCompressorEffect);
+        compressor.label = "Dynamics (Compressor)";
+        compressor.kind = TrackKind::Audio;
+        compressor.parameters = {
+            {"threshold", "Threshold", -20, DefaultKind::Constant, -60, 0, 0.5, 1, "dB", {}, false},
+            {"ratio", "Ratio", 4, DefaultKind::Constant, 1, 30, 0.5, 1, ":1", {}, false},
+            {"attack", "Attack", 10, DefaultKind::Constant, 0.1, 200, 1, 1, "ms", {}, false},
+            {"release", "Release", 120, DefaultKind::Constant, 5, 2000, 5, 0, "ms", {}, false},
+            {"makeup", "Make-up Gain", 0, DefaultKind::Constant, 0, 30, 0.5, 1, "dB", {}, false},
+        };
+        r.push_back(std::move(compressor));
+
+        EffectDef noise;
+        noise.type = std::string(kNoiseReductionEffect);
+        noise.label = "Noise Reduction";
+        noise.kind = TrackKind::Audio;
+        noise.parameters = {
+            {"reduction", "Reduction", 12, DefaultKind::Constant, 0, 40, 1, 0, "dB", {}, false},
+        };
+        r.push_back(std::move(noise));
         return r;
     }();
     return kRegistry;

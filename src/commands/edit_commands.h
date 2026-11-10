@@ -220,9 +220,10 @@ enum class ClipEdge { In, Out };
 // The source content stays, so the duration becomes span / speed (whole frames, limited by the
 // media). Without `ripple` a longer clip stops at the next clip; with it the following clips of
 // that track move.
+// `maintainPitch` (D38) keeps the audio pitch with a time stretch instead of resampling.
 [[nodiscard]] std::unique_ptr<Command> makeSetClipSpeed(const model::Project& project, model::SequenceId sequence,
                                                         const std::vector<model::ClipId>& clips, const Rational& speed,
-                                                        bool reverse, bool ripple);
+                                                        bool reverse, bool ripple, bool maintainPitch = false);
 
 // Rate Stretch tool (R): drags an edge changing the duration but not the content, so the speed
 // follows (span / duration). Never overwrites neighbours.
@@ -244,6 +245,22 @@ enum class ClipEdge { In, Out };
                                                 const std::vector<model::ClipId>& clips, std::string name,
                                                 model::MediaId* nestMedia = nullptr,
                                                 model::SequenceId* nestedSequence = nullptr);
+
+// --- Multi-camera (D43) --------------------------------------------------------------------------
+
+// Creates a multicam source: a new sequence with one media item per video track (angle 1 on V1, ...,
+// all starting at 0 - synchronized by their start) and the audio of the first angle with audio on A1,
+// plus a multicam nested item showing it. `settings` gives the sequence format.
+[[nodiscard]] std::unique_ptr<Command> makeMulticamSource(const model::Project& project,
+                                                          const std::vector<model::MediaId>& angles, std::string name,
+                                                          const model::SequenceSettings& settings,
+                                                          model::MediaId* multicamMedia = nullptr,
+                                                          model::SequenceId* sourceSequence = nullptr);
+
+// Switches the multicam video clip under `at` to `angle` from `at` on (a cut at `at`; the whole clip
+// when `at` is its start). Linked audio is unchanged.
+[[nodiscard]] std::unique_ptr<Command> makeSwitchAngle(const model::Project& project, model::SequenceId sequence,
+                                                       model::ClipId clip, const Rational& at, int angle);
 
 // A nested-sequence media item for `sequence` (D30), to place it from the Project panel.
 [[nodiscard]] model::MediaItem makeNestMedia(const model::Sequence& sequence, std::string name);

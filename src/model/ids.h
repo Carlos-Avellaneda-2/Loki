@@ -47,6 +47,7 @@ using LinkId = Id<struct LinkTag>;
 using TransitionId = Id<struct TransitionTag>;
 using MarkerId = Id<struct MarkerTag>;
 using MaskId = Id<struct MaskTag>;
+using CaptionId = Id<struct CaptionTag>;
 
 } // namespace loki::model
 

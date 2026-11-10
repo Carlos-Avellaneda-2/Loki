@@ -8,6 +8,8 @@ add_library(loki_commands STATIC
     effect_commands.h
     effect_commands.cpp
     edit_commands.cpp
+    caption_commands.h
+    caption_commands.cpp
     marker_commands.h
     marker_commands.cpp
     project_commands.h

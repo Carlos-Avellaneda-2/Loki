@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/effects.h"
 #include "audio/mixer.h"
 #include "media/video_frame.h"
 #include "model/project.h"
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <list>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -123,6 +125,14 @@ struct SequenceSnapshot {
     bool useProxies = false;      // preview only (D24); export always reads the originals
     // Sequences nested in this one (D30), each with the media it uses (and its own nested ones).
     std::unordered_map<model::SequenceId, std::shared_ptr<const SequenceSnapshot>> nested;
+    // Phase 15: captions drawn over the picture (D40), the multicam angle grid (D43) and rendered
+    // preview files (D42, one per segment of `previews.length`, empty path = not rendered).
+    bool showCaptions = false;
+    bool multicamView = false;
+    struct Previews {
+        Rational length;
+        std::vector<std::filesystem::path> files;
+    } previews;
 };
 
 // File to decode pictures from: the proxy when enabled and present, else the original.
@@ -147,6 +157,8 @@ public:
     render::CompositePtr compositeAt(const Rational& t);
     // Nested sequences composite over transparency instead of black.
     void setTransparent(bool transparent) noexcept { m_transparent = transparent; }
+    // Multicam (D43): only this video track (angle) is composited; -1 = all tracks.
+    void setSoloTrack(int track) noexcept { m_soloTrack = track; }
 
 private:
     media::VideoDecoder* decoderFor(const model::Clip& clip, const model::MediaItem& media);
@@ -183,6 +195,16 @@ private:
     std::list<std::pair<model::ClipId, std::unique_ptr<SequenceVideoSource>>> m_nested; // LRU
     std::unordered_map<model::ClipId, std::vector<media::VideoFramePtr>> m_reverseRuns;
     EffectResolver m_effects;
+    int m_soloTrack = -1;
+    // Phase 15 helpers.
+    std::optional<TimedFrame> previewFrame(const Rational& t);                // D42
+    std::optional<render::Layer> captionLayer(const Rational& t);              // D40
+    std::optional<TimedFrame> multicamGrid(const Rational& t);                 // D43
+    std::unordered_map<std::size_t, std::unique_ptr<media::VideoDecoder>> m_previewDecoders;
+    std::map<int, std::unique_ptr<SequenceVideoSource>> m_gridSources;
+    model::MediaId m_gridMedia;
+    std::string m_captionText;
+    media::VideoFramePtr m_captionFrame;
     bool m_transparent = false;
 };
 
@@ -216,7 +238,17 @@ private:
         std::vector<float> window;
         std::int64_t windowStart = 0;
         std::int64_t readPos = -1;
+        // Clip audio effects (D38), reset at every discontinuity, and the pitch-keeping stretcher.
+        audio::ParametricEq eq;
+        audio::Compressor compressor;
+        audio::NoiseReducer noise;
+        audio::TimeStretcher stretcher;
+        bool effectsPrimed = false;
     };
+
+    // Applies the clip's audio effects to m_scratch (`frames` frames). `reset` after a jump.
+    void applyClipEffects(ClipReader& reader, const model::Clip& clip, std::size_t frames, bool reset);
+    [[nodiscard]] static bool hasNoiseReduction(const model::Clip& clip);
 
     // Fills m_scratch with `count` frames of a retimed clip starting at sequence frame `segStart`
     // (varispeed by linear interpolation: pitch follows the speed). Returns frames produced.

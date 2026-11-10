@@ -27,6 +27,10 @@ inline constexpr std::string_view kUltraKeyEffect = "loki.ultraKey";
 inline constexpr std::string_view kStabilizerEffect = "loki.stabilizer";
 inline constexpr std::string_view kGaussianBlurEffect = "loki.gaussianBlur";
 inline constexpr std::string_view kSharpenEffect = "loki.sharpen";
+// Phase 15 audio effects (D38).
+inline constexpr std::string_view kEqEffect = "loki.eq";
+inline constexpr std::string_view kCompressorEffect = "loki.compressor";
+inline constexpr std::string_view kNoiseReductionEffect = "loki.noiseReduction";
 // Curve names of Lumetri (Effect::curves).
 inline constexpr std::string_view kCurveMaster = "master";
 inline constexpr std::string_view kCurveRed = "red";

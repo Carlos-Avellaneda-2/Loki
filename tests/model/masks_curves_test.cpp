@@ -81,7 +81,7 @@ TEST(FormatV4Test, MasksCurvesAndSamplesRoundTrip) {
     builder.addMedia(media).addSequence(seq);
     const auto project = builder.build();
     const auto text = serializeProject(project);
-    EXPECT_NE(text.find("\"version\": 4"), std::string::npos);
+    EXPECT_NE(text.find("\"version\": " + std::to_string(kProjectFormatVersion)), std::string::npos);
     EXPECT_EQ(parseProject(text), project);
 }
 

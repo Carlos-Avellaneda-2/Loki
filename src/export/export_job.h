@@ -28,7 +28,10 @@ struct ExportPreset {
     int height = 0;
     std::int64_t videoBitRate = 0; // 0 = from the output size
     Rational frameRate;            // 0 = sequence frame rate
+    int proresProfile = 3;         // ProRes: 1 = LT, 3 = HQ
 };
+// ProRes LT, video only, sequence size: the render previews (D42).
+[[nodiscard]] ExportPreset renderPreviewPreset();
 [[nodiscard]] const std::vector<ExportPreset>& exportPresets();
 [[nodiscard]] const ExportPreset* findExportPreset(const std::string& id);
 
@@ -69,6 +72,7 @@ struct ExportRequest {
     std::filesystem::path file;
     ExportPreset preset;
     std::string encoder; // empty = best available
+    bool burnCaptions = false; // draw the sequence captions into the picture (D40)
 };
 
 enum class ExportStatus { Running, Finished, Cancelled, Failed };
