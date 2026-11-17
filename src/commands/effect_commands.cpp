@@ -238,6 +238,35 @@ std::unique_ptr<Command> setEffectParameter(const Project& project, ClipId clip,
         gestureKey(gesture, t));
 }
 
+std::unique_ptr<Command> setEffectParameters(const Project& project, ClipId clip, std::string_view effectType,
+                                             const std::vector<std::pair<std::string, double>>& values,
+                                             const Rational& sourceTime, GestureId gesture) {
+    std::vector<std::pair<Target, double>> edits;
+    std::string label;
+    for (const auto& [key, value] : values) {
+        const auto t = target(project, clip, effectType, key);
+        const auto* def = findEffectDef(effectType)->parameter(key);
+        edits.emplace_back(t, std::clamp(value, def->minimum, def->maximum));
+        label = label.empty() ? def->label : label + ", " + def->label;
+    }
+    if (edits.empty()) {
+        return nullptr;
+    }
+    return std::make_unique<EditClipCommand>(
+        clip, "Change " + label,
+        [edits, sourceTime](Clip& c) {
+            for (const auto& [t, value] : edits) {
+                auto& p = ensureParameter(ensureEffect(c, t), t);
+                if (p.isAnimated()) {
+                    putKeyframe(p.keyframes, sourceTime, value);
+                } else {
+                    p.value = value;
+                }
+            }
+        },
+        gesture == 0 ? std::string() : std::to_string(gesture) + ":fxs:" + std::string(effectType));
+}
+
 std::unique_ptr<Command> setParameterAnimated(const Project& project, ClipId clip, std::string_view effectType,
                                               std::string_view key, bool on, const Rational& sourceTime) {
     const auto t = target(project, clip, effectType, key);

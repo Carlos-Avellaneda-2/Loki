@@ -21,6 +21,13 @@ namespace loki::commands {
                                                           double value, const Rational& sourceTime,
                                                           GestureId gesture = 0);
 
+// Several parameters of one effect at once (Position X and Y while dragging on the monitor): each is
+// set like setEffectParameter. Edits with the same non-zero gesture merge into one undo step.
+[[nodiscard]] std::unique_ptr<Command> setEffectParameters(const model::Project& project, model::ClipId clip,
+                                                           std::string_view effectType,
+                                                           const std::vector<std::pair<std::string, double>>& values,
+                                                           const Rational& sourceTime, GestureId gesture = 0);
+
 // Stopwatch: on = the current value becomes a keyframe at `sourceTime`; off = keyframes are removed
 // and the value at `sourceTime` becomes the static value.
 [[nodiscard]] std::unique_ptr<Command> setParameterAnimated(const model::Project& project, model::ClipId clip,

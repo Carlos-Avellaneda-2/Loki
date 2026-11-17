@@ -137,4 +137,53 @@ TEST_F(ColorEffectsTest, StabilizerAnalysisRunsInTheBackgroundAndStoresSamples) 
     EXPECT_FALSE(model::findEffectByType(c(), model::kStabilizerEffect)->samples.empty());
 }
 
+TEST_F(ColorEffectsTest, MotionDragOnTheMonitorAndItsPath) {
+    auto* overlay = window->maskOverlay();
+    overlay->setMotionClip(clip);
+    window->programMonitor()->engine().seek(Rational(1, 2));
+    processEventsFor(30);
+    const auto ctx = commands::clipContext(controller().project(), clip);
+    const auto posAt = [&](const Rational& t) {
+        return std::pair{model::effectiveValue(c(), model::kMotionEffect, "positionX", t, ctx.media, ctx.settings),
+                         model::effectiveValue(c(), model::kMotionEffect, "positionY", t, ctx.media, ctx.settings)};
+    };
+    const auto start = posAt(Rational(1, 2));
+    // Drag the picture (static position): moves it, one undo step.
+    ASSERT_TRUE(overlay->mouse(QEvent::MouseButtonPress, Qt::LeftButton, QPointF(start.first, start.second), 1.0));
+    overlay->mouse(QEvent::MouseMove, Qt::NoButton, QPointF(start.first + 50, start.second + 10), 1.0);
+    overlay->mouse(QEvent::MouseMove, Qt::NoButton, QPointF(start.first + 100, start.second + 20), 1.0);
+    overlay->mouse(QEvent::MouseButtonRelease, Qt::LeftButton, QPointF(start.first + 100, start.second + 20), 1.0);
+    EXPECT_NEAR(posAt(Rational(1, 2)).first, start.first + 100, 0.11);
+    EXPECT_NEAR(posAt(Rational(1, 2)).second, start.second + 20, 0.11);
+    EXPECT_TRUE(overlay->motionPath().samples.empty()); // not animated: no path
+    controller().undoAction()->trigger();
+    EXPECT_NEAR(posAt(Rational(1, 2)).first, start.first, 1e-9);
+
+    // Animate: keyframe at 0.5 s, then drag at 1.5 s -> a second keyframe and a path between them.
+    for (const char* key : {"positionX", "positionY"}) {
+        ASSERT_TRUE(controller().execute(
+            commands::setParameterAnimated(controller().project(), clip, model::kMotionEffect, key, true, Rational(1, 2))));
+    }
+    window->programMonitor()->engine().seek(Rational(3, 2));
+    for (int i = 0; i < 100 && window->programMonitor()->engine().position() != Rational(3, 2); ++i) {
+        processEventsFor(10);
+    }
+    ASSERT_EQ(window->programMonitor()->engine().position(), Rational(3, 2));
+    ASSERT_TRUE(overlay->mouse(QEvent::MouseButtonPress, Qt::LeftButton, QPointF(start.first, start.second), 1.0));
+    overlay->mouse(QEvent::MouseMove, Qt::NoButton, QPointF(start.first + 200, start.second), 1.0);
+    overlay->mouse(QEvent::MouseButtonRelease, Qt::LeftButton, QPointF(start.first + 200, start.second), 1.0);
+    const auto path = overlay->motionPath();
+    ASSERT_EQ(path.keys.size(), 2u);
+    EXPECT_NEAR(path.keys[1].second.x(), start.first + 200, 0.11);
+    EXPECT_GT(path.samples.size(), 10u);
+    EXPECT_NEAR(posAt(Rational(1)).first, start.first + 100, 0.5); // half way between the keyframes
+    // Drag the first keyframe dot down 50 px (it is under the picture: Alt picks the dot).
+    const auto dot = path.keys[0].second;
+    ASSERT_TRUE(overlay->mouse(QEvent::MouseButtonPress, Qt::LeftButton, dot, 1.0, Qt::AltModifier));
+    overlay->mouse(QEvent::MouseMove, Qt::NoButton, dot + QPointF(0, 50), 1.0);
+    overlay->mouse(QEvent::MouseButtonRelease, Qt::LeftButton, dot + QPointF(0, 50), 1.0);
+    EXPECT_NEAR(posAt(Rational(1, 2)).second, start.second + 50, 0.11);
+    EXPECT_EQ(overlay->motionPath().keys.size(), 2u);
+}
+
 } // namespace

@@ -284,6 +284,20 @@ Todos los clips de video tienen estos efectos en Effect Controls (selecciona el 
 
 **Reset** devuelve el efecto a sus valores por defecto.
 
+### Mover un clip en el monitor de programa
+
+Con un clip de video seleccionado, el monitor de programa muestra su caja (azul) y su centro:
+- **Arrastra la imagen** para moverla. Si Position no está animada, cambia la posición fija. Si está animada (con
+  keyframes), se crea o cambia el keyframe en el cabezal.
+- **Ruta de movimiento:** con Position animada aparece una línea punteada con la ruta del clip y un punto amarillo
+  por cada keyframe.
+- **Arrastra un punto** de la ruta para mover ese keyframe. Si el punto está debajo de la imagen, arrástralo con
+  **Alt**.
+- Cada arrastre se deshace con un solo Ctrl+Z.
+
+Ejemplo, ir del punto A al B en 10 segundos: cabezal al inicio, cronómetro de Position X y Position Y; cabezal 10
+segundos después y arrastra la imagen hasta B. La ruta aparece entre los dos puntos.
+
 ### Lumetri Color
 
 Arrastra **Lumetri Color** sobre un clip (o una capa de ajuste). En Effect Controls:

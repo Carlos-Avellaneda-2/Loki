@@ -55,9 +55,8 @@ MaskOverlay::MaskOverlay(ProjectController& controller, VideoView& view, std::fu
     : QObject(parent), m_controller(controller), m_view(view), m_playhead(std::move(playhead)) {
     VideoOverlay overlay;
     overlay.paint = [this](QPainter& p, const QRectF& picture, const QSizeF& canvas) { paint(p, picture, canvas); };
-    overlay.mouse = [this](int type, Qt::MouseButton button, Qt::KeyboardModifiers, const QPointF& canvas, double scale) {
-        return mouse(type, button, canvas, scale);
-    };
+    overlay.mouse = [this](int type, Qt::MouseButton button, Qt::KeyboardModifiers modifiers, const QPointF& canvas,
+                           double scale) { return mouse(type, button, canvas, scale, modifiers); };
     m_view.setOverlay(std::move(overlay));
     connect(&m_controller, &ProjectController::projectChanged, this, [this] { m_view.updateOverlay(); });
 }
@@ -77,6 +76,12 @@ void MaskOverlay::startPen(model::ClipId clip, std::string effectType) {
     m_mask = {};
     m_pen = true;
     m_penPath.clear();
+    m_view.updateOverlay();
+}
+
+void MaskOverlay::setMotionClip(model::ClipId clip) {
+    m_motionClip = clip;
+    m_motionDragging = false;
     m_view.updateOverlay();
 }
 
@@ -132,9 +137,187 @@ std::optional<QPointF> MaskOverlay::toLayer(const QPointF& canvas) const {
     return apply(inv, canvas.x(), canvas.y());
 }
 
+// --- Motion ----------------------------------------------------------------------------------------
+
+Rational MaskOverlay::motionSourceTime() const {
+    const auto* c = m_motionClip ? m_controller.project().findClip(m_motionClip).clip : nullptr;
+    if (c == nullptr || !m_playhead) {
+        return {};
+    }
+    return c->toSourceTime(max(c->start, min(m_playhead(), c->end())));
+}
+
+MaskOverlay::MotionPath MaskOverlay::motionPath() const {
+    MotionPath path;
+    const auto* c = m_motionClip ? m_controller.project().findClip(m_motionClip).clip : nullptr;
+    if (c == nullptr) {
+        return path;
+    }
+    const auto ctx = commands::clipContext(m_controller.project(), m_motionClip);
+    const auto* motion = model::findEffectByType(*c, model::kMotionEffect);
+    const auto* px = motion != nullptr ? motion->findParameter("positionX") : nullptr;
+    const auto* py = motion != nullptr ? motion->findParameter("positionY") : nullptr;
+    if ((px == nullptr || !px->isAnimated()) && (py == nullptr || !py->isAnimated())) {
+        return path; // a still position has no path
+    }
+    const auto positionAt = [&](const Rational& t) {
+        return QPointF(model::effectiveValue(*c, model::kMotionEffect, "positionX", t, ctx.media, ctx.settings),
+                       model::effectiveValue(*c, model::kMotionEffect, "positionY", t, ctx.media, ctx.settings));
+    };
+    const Rational lo = min(c->sourceIn, c->sourceOut());
+    const Rational hi = max(c->sourceIn, c->sourceOut());
+    constexpr int kSamples = 120;
+    for (int i = 0; i <= kSamples; ++i) {
+        path.samples.push_back(positionAt(lo + (hi - lo) * Rational(i, kSamples)));
+    }
+    std::vector<Rational> times;
+    for (const auto* p : {px, py}) {
+        if (p != nullptr) {
+            for (const auto& k : p->keyframes) {
+                if (std::find(times.begin(), times.end(), k.time) == times.end()) {
+                    times.push_back(k.time);
+                }
+            }
+        }
+    }
+    std::sort(times.begin(), times.end());
+    for (const auto& t : times) {
+        path.keys.emplace_back(t, positionAt(t));
+    }
+    return path;
+}
+
+void MaskOverlay::paintMotion(QPainter& p, const QRectF& picture, const QSizeF& canvas) {
+    const auto* c = m_controller.project().findClip(m_motionClip).clip;
+    if (c == nullptr || canvas.width() <= 0) {
+        return;
+    }
+    const double s = picture.width() / canvas.width();
+    const auto toWidget = [&](const QPointF& q) { return QPointF(picture.left() + q.x() * s, picture.top() + q.y() * s); };
+    // Motion path with its keyframes.
+    const auto path = motionPath();
+    if (path.samples.size() > 1) {
+        QPolygonF line;
+        for (const auto& q : path.samples) {
+            line << toWidget(q);
+        }
+        p.setPen(QPen(QColor(0xff, 0xff, 0xff, 170), 1.2, Qt::DotLine));
+        p.setBrush(Qt::NoBrush);
+        p.drawPolyline(line);
+        p.setPen(QPen(Qt::black, 1));
+        p.setBrush(QColor(0xff, 0xd0, 0x40));
+        for (const auto& [t, q] : path.keys) {
+            p.drawEllipse(toWidget(q), 4.5, 4.5);
+        }
+    }
+    // Bounding box and center while the playhead is over the clip.
+    const Rational now = m_playhead ? m_playhead() : Rational();
+    const auto m = [&]() -> std::optional<render::Matrix3> {
+        const auto saved = m_clip;
+        auto* self = const_cast<MaskOverlay*>(this);
+        self->m_clip = m_motionClip;
+        auto r = layerToCanvasNow();
+        self->m_clip = saved;
+        return r;
+    }();
+    if (!m || now < c->start || !(now < c->end())) {
+        return;
+    }
+    const auto ctx = commands::clipContext(m_controller.project(), m_motionClip);
+    const double w = ctx.media.width > 0 ? ctx.media.width : ctx.settings.width;
+    const double h = ctx.media.height > 0 ? ctx.media.height : ctx.settings.height;
+    QPolygonF box;
+    for (const auto& [x, y] : {std::pair{0.0, 0.0}, std::pair{w, 0.0}, std::pair{w, h}, std::pair{0.0, h}}) {
+        box << toWidget(apply(*m, x, y));
+    }
+    p.setPen(QPen(QColor(0x40, 0xb0, 0xff), 1.2));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolygon(box);
+    const auto center = toWidget(QPointF(
+        model::effectiveValue(*c, model::kMotionEffect, "positionX", motionSourceTime(), ctx.media, ctx.settings),
+        model::effectiveValue(*c, model::kMotionEffect, "positionY", motionSourceTime(), ctx.media, ctx.settings)));
+    p.drawLine(center - QPointF(6, 0), center + QPointF(6, 0));
+    p.drawLine(center - QPointF(0, 6), center + QPointF(0, 6));
+}
+
+bool MaskOverlay::motionMouse(int type, Qt::MouseButton button, const QPointF& canvas, double scale, bool alt) {
+    const auto* c = m_motionClip ? m_controller.project().findClip(m_motionClip).clip : nullptr;
+    if (c == nullptr) {
+        return false;
+    }
+    const auto commitPosition = [&](const QPointF& position, const Rational& sourceTime) {
+        try {
+            if (auto command = commands::setEffectParameters(m_controller.project(), m_motionClip, model::kMotionEffect,
+                                                             {{"positionX", position.x()}, {"positionY", position.y()}},
+                                                             sourceTime, m_gesture)) {
+                m_controller.execute(std::move(command));
+            }
+        } catch (const std::exception& e) {
+            emit m_controller.commandFailed(QString::fromUtf8(e.what()));
+        }
+    };
+    if (type == QEvent::MouseButtonPress && button == Qt::LeftButton) {
+        const double grab = kHandlePixels * scale;
+        // Is the click on the picture (playhead over the clip)?
+        const Rational now = m_playhead ? m_playhead() : Rational();
+        const auto ctx = commands::clipContext(m_controller.project(), m_motionClip);
+        const double w = ctx.media.width > 0 ? ctx.media.width : ctx.settings.width;
+        const double h = ctx.media.height > 0 ? ctx.media.height : ctx.settings.height;
+        bool onPicture = false;
+        if (c->start <= now && now < c->end()) {
+            const auto saved = m_clip;
+            m_clip = m_motionClip;
+            const auto local = toLayer(canvas);
+            m_clip = saved;
+            onPicture = local && local->x() >= 0 && local->y() >= 0 && local->x() <= w && local->y() <= h;
+        }
+        // A keyframe dot of the path: outside the picture, or with Alt.
+        if (alt || !onPicture) {
+            for (const auto& [t, q] : motionPath().keys) {
+                if (std::hypot(q.x() - canvas.x(), q.y() - canvas.y()) <= grab) {
+                    m_motionKey = t;
+                    m_motionOriginal = q;
+                    m_motionStart = canvas;
+                    m_motionDragging = true;
+                    m_gesture = m_controller.newGestureId();
+                    return true;
+                }
+            }
+        }
+        if (!onPicture) {
+            return false;
+        }
+        const Rational t = motionSourceTime();
+        m_motionKey.reset();
+        m_motionOriginal = QPointF(model::effectiveValue(*c, model::kMotionEffect, "positionX", t, ctx.media, ctx.settings),
+                                   model::effectiveValue(*c, model::kMotionEffect, "positionY", t, ctx.media, ctx.settings));
+        m_motionStart = canvas;
+        m_motionDragging = true;
+        m_gesture = m_controller.newGestureId();
+        return true;
+    }
+    if (type == QEvent::MouseMove && m_motionDragging) {
+        const QPointF position = m_motionOriginal + (canvas - m_motionStart);
+        commitPosition(QPointF(std::round(position.x() * 10.0) / 10.0, std::round(position.y() * 10.0) / 10.0),
+                       m_motionKey ? *m_motionKey : motionSourceTime());
+        m_view.updateOverlay();
+        return true;
+    }
+    if (type == QEvent::MouseButtonRelease && m_motionDragging) {
+        m_motionDragging = false;
+        m_motionKey.reset();
+        m_gesture = 0;
+        return true;
+    }
+    return false;
+}
+
 void MaskOverlay::paint(QPainter& p, const QRectF& picture, const QSizeF& canvas) {
     const auto m = layerToCanvasNow();
     if (!m || canvas.width() <= 0) {
+        if (!m_pen && m_motionClip && canvas.width() > 0) {
+            paintMotion(p, picture, canvas);
+        }
         return;
     }
     const double s = picture.width() / canvas.width();
@@ -170,6 +353,10 @@ void MaskOverlay::paint(QPainter& p, const QRectF& picture, const QSizeF& canvas
     }
     if (const auto* mk = mask()) {
         drawPath(mk->pathAt(sourceTime()), true, QColor(0x40, 0xb0, 0xff));
+        return;
+    }
+    if (m_motionClip) {
+        paintMotion(p, picture, canvas);
     }
 }
 
@@ -200,7 +387,11 @@ void MaskOverlay::commitPath(std::vector<model::MaskVertex> path) {
     }
 }
 
-bool MaskOverlay::mouse(int type, Qt::MouseButton button, const QPointF& canvas, double scale) {
+bool MaskOverlay::mouse(int type, Qt::MouseButton button, const QPointF& canvas, double scale,
+                        Qt::KeyboardModifiers modifiers) {
+    if (!m_pen && mask() == nullptr) { // no mask being edited: Motion
+        return motionMouse(type, button, canvas, scale, modifiers.testFlag(Qt::AltModifier));
+    }
     const auto local = toLayer(canvas);
     const auto m = layerToCanvasNow();
     if (!local || !m || clip() == nullptr) {

@@ -169,6 +169,11 @@ MainWindow::MainWindow(QWidget* parent, playback::PlaybackOptions playbackOption
         m_effectControls->setClip(single ? pick : model::ClipId());
         if (m_maskOverlay != nullptr) {
             m_maskOverlay->select({}, {}, {});
+            // Motion on the Program Monitor: the selected video clip.
+            const auto ref = project.findClip(pick);
+            m_maskOverlay->setMotionClip(single && ref.track != nullptr && ref.track->kind == model::TrackKind::Video
+                                             ? pick
+                                             : model::ClipId());
         }
         if (single && pick) {
             dockWidget(ui::PanelId::EffectControls)->raise();
